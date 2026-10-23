@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Carro Guía · Navegación</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Página del celular montado en el carro: mapa arriba, controles abajo (a la derecha en computador). */
+:root{
+  --bg:#0f1a33; --panel:#172446; --panel2:#1f2f5a; --line:#2c3d6b;
+  --fg:#eef2fa; --muted:#9daacb; --accent:#e63946; --path:#ffc94a;
+  --ok:#2fbf71; --warn:#ff9f1c; --route:#4cc9f0;
+  --font:"Rubik",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.45 var(--font)}
+button,input,select{font:inherit;color:inherit}
+#app{display:grid;height:100%;grid-template-columns:1fr 390px;grid-template-rows:auto 1fr;grid-template-areas:"head head" "map panel"}
+header{grid-area:head;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--panel);border-bottom:1px solid var(--line);
+  padding:10px max(16px,env(safe-area-inset-right,0px)) 10px max(16px,env(safe-area-inset-left,0px));padding-top:max(10px,env(safe-area-inset-top,0px))}
+header h1{margin:0;font-size:18px;font-weight:700}
+header h1 span{color:var(--accent)}
+#chips{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);background:var(--panel2);border-radius:999px;padding:3px 10px;font-size:13px;color:var(--muted);white-space:nowrap}
+.chip.ok{border-color:var(--ok);color:var(--ok)}
+.chip.warn{border-color:var(--warn);color:var(--warn)}
+.chip.bad{border-color:var(--accent);color:#ff8a93}
+#map{grid-area:map;min-height:0;background:#0b1326}
+#panel{grid-area:panel;overflow-y:auto;background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;gap:16px;min-width:0;
+  padding:16px max(16px,env(safe-area-inset-right,0px)) calc(16px + env(safe-area-inset-bottom,0px)) 16px}
+.sec{display:flex;flex-direction:column;gap:10px}
+h2{margin:0;font-size:12px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+select,input[type=number]{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 11px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.btn{border:1px solid var(--line);background:var(--panel2);border-radius:12px;padding:10px 14px;cursor:pointer;font-weight:500;touch-action:manipulation}
+.btn:hover{border-color:var(--muted)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.go{background:var(--ok);border-color:var(--ok);color:#06210f;font-weight:700;flex:1;font-size:17px;padding:14px}
+.btn.stop{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700;flex:1;font-size:17px;padding:14px}
+.btn:focus-visible{outline:2px solid var(--route);outline-offset:2px}
+#estado{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:12px}
+#msg{font-size:18px;font-weight:600}
+#msg.ok{color:var(--ok)} #msg.warn{color:var(--warn)} #msg.bad{color:#ff8a93}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.kv{display:flex;flex-direction:column;gap:2px;min-width:0}
+.kv span{font-size:12px;color:var(--muted)}
+.kv b{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pad{display:grid;grid-template-columns:repeat(3,64px);grid-template-rows:repeat(2,56px);gap:6px;justify-content:start}
+.pad .btn{padding:0;font-size:22px}
+.help{margin:0;font-size:13px;color:var(--muted)}
+details{border-top:1px solid var(--line);padding-top:12px}
+summary{cursor:pointer;font-size:12px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+details[open] summary{margin-bottom:10px}
+label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted)}
+label.f output{color:var(--fg);font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--route)}
+.check{display:flex;gap:8px;align-items:center;cursor:pointer}
+#log{margin:0;font:12px/1.5 ui-monospace,Consolas,monospace;color:var(--muted);white-space:pre-wrap;max-height:130px;overflow-y:auto;background:var(--bg);border-radius:10px;padding:8px}
+.car{width:34px;height:34px;display:grid;place-items:center}
+.car svg{width:34px;height:34px;filter:drop-shadow(0 1px 3px rgba(0,0,0,.8))}
+.dst{width:12px;height:12px;border-radius:50%;background:var(--accent);border:2px solid #fff}
+.wp{width:14px;height:14px;border-radius:50%;background:var(--route);border:3px solid #fff}
+.leaflet-tooltip.tt{background:var(--bg);color:var(--fg);border:1px solid var(--line);font:500 12px var(--font);padding:2px 7px;border-radius:8px}
+.leaflet-tooltip.tt::before{display:none}
+@media (max-width:760px){
+  #app{grid-template-columns:1fr;grid-template-rows:auto 40vh 1fr;grid-template-areas:"head" "map" "panel"}
+  #panel{border-left:0;border-top:1px solid var(--line);padding-left:max(16px,env(safe-area-inset-left,0px))}
+  header h1{font-size:16px}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Carro Guía · <span>Navegación</span></h1>
+    <div id="chips">
+      <span class="chip" id="chipBt">Carro: sin conectar</span>
+      <span class="chip" id="chipGps">GPS: apagado</span>
+      <span class="chip" id="chipBru">Brújula: apagada</span>
+    </div>
+  </header>
+  <div id="map"></div>
+  <aside id="panel">
+    <section class="sec">
+      <h2>1 · Conectar</h2>
+      <div class="row">
+        <button class="btn" id="btBtn">Conectar carro (Bluetooth)</button>
+        <button class="btn" id="senBtn">Activar GPS y brújula</button>
+      </div>
+      <button class="btn" id="btAllBtn" style="align-self:flex-start;font-size:13px;padding:6px 10px">No aparece el carro: ver todos los dispositivos</button>
+      <p class="help">Celular acostado en el carro, pantalla hacia arriba y la parte de arriba del celular hacia el frente del carro.</p>
+    </section>
+
+    <section class="sec">
+      <h2>2 · Destino</h2>
+      <select id="destSel" aria-label="Destino"><option value="">Elige a dónde ir…</option></select>
+      <p class="help">También puedes tocar el mapa cerca de un destino.</p>
+      <div class="row">
+        <button class="btn go" id="goBtn" disabled>Iniciar ruta</button>
+        <button class="btn stop" id="stopBtn">Detener</button>
+      </div>
+    </section>
+
+    <section id="estado" aria-live="polite">
+      <div id="msg">Conecta el carro y activa el GPS.</div>
+      <div class="grid">
+        <div class="kv"><span>Falta</span><b id="vFalta">–</b></div>
+        <div class="kv"><span>Siguiente punto</span><b id="vSig">–</b></div>
+        <div class="kv"><span>Girar</span><b id="vErr">–</b></div>
+        <div class="kv"><span>Precisión GPS</span><b id="vAcc">–</b></div>
+        <div class="kv"><span>Rumbo</span><b id="vRumbo">–</b></div>
+        <div class="kv"><span>Obstáculo</span><b id="vObs">–</b></div>
+      </div>
+    </section>
+
+    <section class="sec">
+      <h2>Prueba manual</h2>
+      <p class="help">Mantén presionado para mover el carro. Al soltar se detiene.</p>
+      <div class="pad">
+        <span></span><button class="btn" data-man="F" aria-label="Adelante">▲</button><span></span>
+        <button class="btn" data-man="L" aria-label="Izquierda">◀</button><button class="btn" data-man="B" aria-label="Atrás">▼</button><button class="btn" data-man="R" aria-label="Derecha">▶</button>
+      </div>
+    </section>
+
+    <details>
+      <summary>Ajustes</summary>
+      <div class="sec">
+        <label class="f" for="velIn">Velocidad al avanzar <output id="velOut"></output><input type="range" id="velIn" min="80" max="255" step="5" value="150"></label>
+        <label class="f" for="radIn">Distancia para dar por alcanzado un punto <output id="radOut"></output><input type="range" id="radIn" min="2" max="10" step="0.5" value="5"></label>
+        <label class="f" for="kpIn">Fuerza de corrección al girar <output id="kpOut"></output><input type="range" id="kpIn" min="0.5" max="4" step="0.1" value="1.8"></label>
+        <label class="f" for="offIn">Ajuste de brújula (si el carro siempre se desvía al mismo lado) <output id="offOut"></output><input type="range" id="offIn" min="-180" max="180" step="1" value="0"></label>
+        <label class="check"><input type="checkbox" id="simChk"> Modo simulación (probar sin carro, en el computador)</label>
+        <label class="f" for="simVel">Rapidez de la simulación <output id="simOut"></output><input type="range" id="simVel" min="1" max="20" step="1" value="5"></label>
+        <p class="help">En simulación, el primer toque en el mapa pone el carro y los siguientes eligen destino.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Registro</summary>
+      <pre id="log"></pre>
+    </details>
+  </aside>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+"use strict";
+// ======================= MAPA DEL CAMPUS (hecho con el editor) =======================
+const MAPA = {"version":1,"nombre":"Campus UMNG Cajicá","nodos":[{"id":"n1","lat":4.9429405,"lng":-74.0107352,"nombre":"Edificio Jose Maria Cabal","tipo":"destino"},{"id":"n2","lat":4.9426264,"lng":-74.0107781,"nombre":"Aulas B","tipo":"destino"},{"id":"n3","lat":4.9422098,"lng":-74.0105367,"nombre":"Aulas A","tipo":"destino"},{"id":"n4","lat":4.9422043,"lng":-74.0103596,"nombre":"cafeteria Arepas","tipo":"destino"},{"id":"n5","lat":4.9418197,"lng":-74.0106601,"nombre":"Papeleria y BBVA","tipo":"destino"},{"id":"n6","lat":4.9418784,"lng":-74.0110087,"nombre":"Edificio Jose Celestino Mutis","tipo":"destino"},{"id":"n7","lat":4.941257,"lng":-74.0101987,"nombre":"cafeteria del D","tipo":"destino"},{"id":"n8","lat":4.9414832,"lng":-74.0108961,"nombre":"parqueadero central","tipo":"destino"},{"id":"n9","lat":4.9410912,"lng":-74.010365,"nombre":"1 entrada aulas d","tipo":"destino"},{"id":"n10","lat":4.9404873,"lng":-74.0105259,"nombre":"Aulas E","tipo":"destino"},{"id":"n11","lat":4.9403538,"lng":-74.0105796,"nombre":"Cafeteria E 3 piso","tipo":"cruce"},{"id":"n12","lat":4.9402042,"lng":-74.0106064,"nombre":"Coase 3 piso","tipo":"cruce"},{"id":"n13","lat":4.9439242,"lng":-74.0120816,"nombre":"Concha acustica","tipo":"destino"},{"id":"n14","lat":4.9450675,"lng":-74.012382,"nombre":"restaurante y cafeteria de canchas","tipo":"destino"},{"id":"n15","lat":4.9462056,"lng":-74.013707,"nombre":"parqueadero canchas","tipo":"destino"},{"id":"n16","lat":4.9466116,"lng":-74.0141201,"nombre":"Centro Literario fernando soto","tipo":"destino"},{"id":"n17","lat":4.9396109,"lng":-74.0103436,"nombre":"Fase 1","tipo":"destino"},{"id":"n18","lat":4.9398461,"lng":-74.0108103,"nombre":"Fase 2","tipo":"destino"},{"id":"n19","lat":4.9397284,"lng":-74.0116471,"nombre":"Centro de estudios en infraestructura vial","tipo":"destino"},{"id":"n20","lat":4.9399392,"lng":-74.0131652,"nombre":"parqueadero Pajarraco","tipo":"destino"},{"id":"n21","lat":4.9414562,"lng":-74.0119314,"nombre":"capilla","tipo":"destino"},{"id":"n22","lat":4.9414562,"lng":-74.0118027,"nombre":"cafeteria c","tipo":"destino"},{"id":"n23","lat":4.9413654,"lng":-74.0116417,"nombre":"Auditorio D","tipo":"destino"},{"id":"n24","lat":4.9407921,"lng":-74.0123767,"nombre":"Facultad de estudios a distancia","tipo":"destino"},{"id":"n25","lat":4.9409311,"lng":-74.011969,"nombre":"hemiciclos","tipo":"destino"},{"id":"n26","lat":4.942273,"lng":-74.0125859,"nombre":"lago central","tipo":"cruce"},{"id":"n27","lat":4.9419264,"lng":-74.011969,"nombre":"biblioteca","tipo":"destino"},{"id":"n28","lat":4.9421227,"lng":-74.0115881,"nombre":"aulas C","tipo":"destino"},{"id":"n29","lat":4.9449291,"lng":-74.0136802,"nombre":"canchas","tipo":"cruce"},{"id":"n30","lat":4.9429799,"lng":-74.0155309,"nombre":"ENRADA UMNG","tipo":"destino"},{"id":"n31","lat":4.9426786,"lng":-74.0145707,"nombre":"banderas","tipo":"cruce"},{"id":"n32","lat":4.9423954,"lng":-74.0129399,"nombre":"el potro","tipo":"cruce"},{"id":"n33","lat":4.9422162,"lng":-74.012382,"nombre":"","tipo":"cruce"},{"id":"n34","lat":4.942291,"lng":-74.0122157,"nombre":"","tipo":"cruce"},{"id":"n35","lat":4.9424886,"lng":-74.0121406,"nombre":"","tipo":"cruce"},{"id":"n36","lat":4.9426488,"lng":-74.0120441,"nombre":"","tipo":"cruce"},{"id":"n37","lat":4.9427664,"lng":-74.01191,"nombre":"","tipo":"cruce"},{"id":"n38","lat":4.9427931,"lng":-74.0117598,"nombre":"","tipo":"cruce"},{"id":"n39","lat":4.9427717,"lng":-74.0116149,"nombre":"","tipo":"cruce"},{"id":"n40","lat":4.9426968,"lng":-74.0112984,"nombre":"","tipo":"cruce"},{"id":"n41","lat":4.9431402,"lng":-74.0113038,"nombre":"","tipo":"cruce"},{"id":"n42","lat":4.9434446,"lng":-74.0113842,"nombre":"","tipo":"cruce"},{"id":"n43","lat":4.9437544,"lng":-74.0115505,"nombre":"","tipo":"cruce"},{"id":"n44","lat":4.9440055,"lng":-74.0117329,"nombre":"","tipo":"cruce"},{"id":"n45","lat":4.9425956,"lng":-74.0113038,"nombre":"sillas lago","tipo":"cruce"},{"id":"n46","lat":4.9423232,"lng":-74.0113789,"nombre":"","tipo":"cruce"},{"id":"n47","lat":4.9422965,"lng":-74.0115345,"nombre":"","tipo":"cruce"},{"id":"n48","lat":4.9423364,"lng":-74.0144742,"nombre":"","tipo":"cruce"},{"id":"n49","lat":4.9417624,"lng":-74.0144312,"nombre":"","tipo":"cruce"},{"id":"n50","lat":4.9414472,"lng":-74.0143776,"nombre":"","tipo":"cruce"},{"id":"n51","lat":4.9412496,"lng":-74.01434,"nombre":"","tipo":"cruce"},{"id":"n52","lat":4.941084,"lng":-74.0142274,"nombre":"","tipo":"cruce"},{"id":"n53","lat":4.9409238,"lng":-74.0141416,"nombre":"","tipo":"cruce"},{"id":"n54","lat":4.9408116,"lng":-74.0140826,"nombre":"","tipo":"cruce"},{"id":"n55","lat":4.940653,"lng":-74.0139753,"nombre":"","tipo":"cruce"},{"id":"n56","lat":4.940443,"lng":-74.0138036,"nombre":"","tipo":"cruce"},{"id":"n57","lat":4.9403415,"lng":-74.0136319,"nombre":"","tipo":"cruce"},{"id":"n58","lat":4.9402454,"lng":-74.0134925,"nombre":"","tipo":"cruce"},{"id":"n59","lat":4.9401653,"lng":-74.0133691,"nombre":"","tipo":"cruce"},{"id":"n60","lat":4.9401708,"lng":-74.013235,"nombre":"","tipo":"cruce"},{"id":"n61","lat":4.942707,"lng":-74.0111375,"nombre":"","tipo":"cruce"},{"id":"n62","lat":4.9426002,"lng":-74.0104991,"nombre":"","tipo":"cruce"},{"id":"n63","lat":4.9424397,"lng":-74.0105152,"nombre":"","tipo":"cruce"},{"id":"n64","lat":4.9422207,"lng":-74.0112501,"nombre":"","tipo":"cruce"},{"id":"n65","lat":4.9419109,"lng":-74.0112877,"nombre":"","tipo":"cruce"},{"id":"n66","lat":4.9415531,"lng":-74.0113896,"nombre":"","tipo":"cruce"},{"id":"n67","lat":4.9412379,"lng":-74.0115398,"nombre":"","tipo":"cruce"},{"id":"n68","lat":4.9410243,"lng":-74.0116739,"nombre":"","tipo":"cruce"},{"id":"n69","lat":4.9408266,"lng":-74.011808,"nombre":"","tipo":"cruce"},{"id":"n70","lat":4.940661,"lng":-74.0119582,"nombre":"","tipo":"cruce"},{"id":"n71","lat":4.9407038,"lng":-74.012087,"nombre":"","tipo":"cruce"},{"id":"n72","lat":4.9408213,"lng":-74.0120494,"nombre":"","tipo":"cruce"},{"id":"n73","lat":4.9409067,"lng":-74.0118992,"nombre":"","tipo":"cruce"},{"id":"n74","lat":4.9441234,"lng":-74.0117168,"nombre":"","tipo":"cruce"},{"id":"n75","lat":4.9442355,"lng":-74.0118456,"nombre":"","tipo":"cruce"},{"id":"n76","lat":4.9442569,"lng":-74.0119636,"nombre":"","tipo":"cruce"},{"id":"n77","lat":4.9442729,"lng":-74.0122426,"nombre":"","tipo":"cruce"},{"id":"n78","lat":4.9442623,"lng":-74.0124625,"nombre":"","tipo":"cruce"},{"id":"n79","lat":4.944321,"lng":-74.0125859,"nombre":"","tipo":"cruce"},{"id":"n80","lat":4.9442783,"lng":-74.0126932,"nombre":"","tipo":"cruce"},{"id":"n81","lat":4.944321,"lng":-74.0128005,"nombre":"","tipo":"cruce"},{"id":"n82","lat":4.9444065,"lng":-74.0128917,"nombre":"","tipo":"cruce"},{"id":"n83","lat":4.9445186,"lng":-74.012897,"nombre":"","tipo":"cruce"},{"id":"n84","lat":4.9446735,"lng":-74.0128273,"nombre":"","tipo":"cruce"},{"id":"n85","lat":4.9446094,"lng":-74.0127307,"nombre":"","tipo":"cruce"},{"id":"n86","lat":4.9448284,"lng":-74.0126395,"nombre":"","tipo":"cruce"},{"id":"n87","lat":4.9449887,"lng":-74.0125591,"nombre":"","tipo":"cruce"},{"id":"n88","lat":4.9428678,"lng":-74.0111589,"nombre":"","tipo":"cruce"},{"id":"n89","lat":4.942996,"lng":-74.0111697,"nombre":"","tipo":"cruce"},{"id":"n90","lat":4.9430868,"lng":-74.0111965,"nombre":"","tipo":"cruce"},{"id":"n91","lat":4.9418364,"lng":-74.0105152,"nombre":"","tipo":"cruce"},{"id":"n92","lat":4.9418257,"lng":-74.0103865,"nombre":"","tipo":"cruce"},{"id":"n93","lat":4.9416547,"lng":-74.0103811,"nombre":"","tipo":"cruce"},{"id":"n94","lat":4.9415533,"lng":-74.010424,"nombre":"","tipo":"cruce"},{"id":"n95","lat":4.9415372,"lng":-74.0103328,"nombre":"","tipo":"cruce"},{"id":"n96","lat":4.9414838,"lng":-74.0102524,"nombre":"","tipo":"cruce"},{"id":"n97","lat":4.941361,"lng":-74.0102202,"nombre":"","tipo":"cruce"},{"id":"n98","lat":4.9412808,"lng":-74.0102684,"nombre":"","tipo":"cruce"},{"id":"n99","lat":4.9409704,"lng":-74.0104133,"nombre":"","tipo":"cruce"},{"id":"n100","lat":4.9407781,"lng":-74.0104562,"nombre":"","tipo":"cruce"},{"id":"n101","lat":4.9405804,"lng":-74.0105045,"nombre":"","tipo":"cruce"},{"id":"n102","lat":4.941216,"lng":-74.0103328,"nombre":"","tipo":"cruce"},{"id":"n103","lat":4.9400776,"lng":-74.0106601,"nombre":"salida Aulas e","tipo":"destino"},{"id":"n104","lat":4.9399708,"lng":-74.0106708,"nombre":"","tipo":"cruce"},{"id":"n105","lat":4.9398479,"lng":-74.0106922,"nombre":"","tipo":"cruce"},{"id":"n106","lat":4.9397945,"lng":-74.0105313,"nombre":"","tipo":"cruce"},{"id":"n107","lat":4.9396877,"lng":-74.0104347,"nombre":"","tipo":"cruce"},{"id":"n108","lat":4.9400083,"lng":-74.013015,"nombre":"","tipo":"cruce"},{"id":"n109","lat":4.9400083,"lng":-74.0128434,"nombre":"","tipo":"cruce"},{"id":"n110","lat":4.9400564,"lng":-74.0126878,"nombre":"","tipo":"cruce"},{"id":"n111","lat":4.9400136,"lng":-74.0125537,"nombre":"","tipo":"cruce"},{"id":"n112","lat":4.9399602,"lng":-74.0124249,"nombre":"","tipo":"cruce"},{"id":"n113","lat":4.9399122,"lng":-74.0122265,"nombre":"","tipo":"cruce"},{"id":"n114","lat":4.939816,"lng":-74.0118992,"nombre":"","tipo":"cruce"},{"id":"n115","lat":4.9446959,"lng":-74.0130043,"nombre":"","tipo":"cruce"},{"id":"n116","lat":4.944744,"lng":-74.0131652,"nombre":"","tipo":"cruce"},{"id":"n117","lat":4.9448081,"lng":-74.0133423,"nombre":"","tipo":"cruce"},{"id":"n118","lat":4.9448668,"lng":-74.0135354,"nombre":"","tipo":"cruce"},{"id":"n119","lat":4.9448775,"lng":-74.0127629,"nombre":"","tipo":"cruce"},{"id":"n120","lat":4.9451125,"lng":-74.0126395,"nombre":"","tipo":"cruce"},{"id":"n121","lat":4.9452247,"lng":-74.0125537,"nombre":"","tipo":"cruce"},{"id":"n122","lat":4.9453582,"lng":-74.0127575,"nombre":"","tipo":"cruce"},{"id":"n123","lat":4.9454864,"lng":-74.0130794,"nombre":"","tipo":"cruce"},{"id":"n124","lat":4.9456253,"lng":-74.0134335,"nombre":"","tipo":"cruce"},{"id":"n125","lat":4.9457428,"lng":-74.0137124,"nombre":"","tipo":"cruce"},{"id":"n126","lat":4.9458443,"lng":-74.0138787,"nombre":"","tipo":"cruce"},{"id":"n127","lat":4.9462342,"lng":-74.0138519,"nombre":"","tipo":"cruce"},{"id":"n129","lat":4.9464746,"lng":-74.013986,"nombre":"","tipo":"cruce"},{"id":"n130","lat":4.9465013,"lng":-74.0140933,"nombre":"","tipo":"cruce"},{"id":"n131","lat":4.941847,"lng":-74.0118134,"nombre":"","tipo":"cruce"},{"id":"n132","lat":4.9418214,"lng":-74.0117128,"nombre":"","tipo":"cruce"},{"id":"n133","lat":4.9396569,"lng":-74.0114594,"nombre":"","tipo":"cruce"},{"id":"n134","lat":4.9397424,"lng":-74.0113467,"nombre":"","tipo":"cruce"},{"id":"n135","lat":4.9398973,"lng":-74.0112984,"nombre":"","tipo":"cruce"},{"id":"n136","lat":4.9398171,"lng":-74.0111107,"nombre":"","tipo":"cruce"},{"id":"n137","lat":4.9397851,"lng":-74.0109766,"nombre":"","tipo":"cruce"},{"id":"n138","lat":4.9408907,"lng":-74.0107781,"nombre":"2 entrada aulas D","tipo":"destino"},{"id":"n139","lat":4.9414355,"lng":-74.0113252,"nombre":"","tipo":"cruce"},{"id":"n140","lat":4.9413821,"lng":-74.0112394,"nombre":"","tipo":"cruce"},{"id":"n141","lat":4.9413607,"lng":-74.011057,"nombre":"","tipo":"cruce"},{"id":"n142","lat":4.94135,"lng":-74.0109497,"nombre":"","tipo":"cruce"},{"id":"n143","lat":4.9413554,"lng":-74.0108263,"nombre":"","tipo":"cruce"},{"id":"n144","lat":4.9412913,"lng":-74.0107727,"nombre":"","tipo":"cruce"},{"id":"n145","lat":4.9411524,"lng":-74.0108103,"nombre":"","tipo":"cruce"},{"id":"n146","lat":4.9409708,"lng":-74.0108532,"nombre":"","tipo":"cruce"},{"id":"n147","lat":4.9407571,"lng":-74.0108907,"nombre":"","tipo":"cruce"},{"id":"n148","lat":4.9406236,"lng":-74.0109122,"nombre":"","tipo":"cruce"},{"id":"n149","lat":4.9404847,"lng":-74.0109122,"nombre":"2 entrada aulas E","tipo":"destino"}],"caminos":[["n30","n31"],["n31","n32"],["n32","n33"],["n33","n34"],["n34","n35"],["n35","n36"],["n36","n37"],["n37","n38"],["n38","n39"],["n39","n40"],["n40","n41"],["n41","n42"],["n42","n43"],["n43","n44"],["n44","n13"],["n45","n46"],["n46","n47"],["n28","n47"],["n48","n49"],["n49","n50"],["n50","n51"],["n51","n52"],["n52","n53"],["n53","n54"],["n54","n55"],["n55","n56"],["n56","n57"],["n57","n58"],["n58","n59"],["n59","n60"],["n20","n60"],["n31","n48"],["n40","n45"],["n45","n61"],["n2","n61"],["n61","n62"],["n62","n63"],["n63","n3"],["n3","n4"],["n3","n5"],["n28","n22"],["n22","n23"],["n22","n21"],["n64","n65"],["n65","n66"],["n66","n67"],["n67","n68"],["n68","n69"],["n69","n70"],["n70","n71"],["n71","n72"],["n72","n73"],["n46","n64"],["n25","n73"],["n74","n75"],["n75","n76"],["n76","n77"],["n77","n78"],["n78","n79"],["n79","n80"],["n80","n81"],["n81","n82"],["n82","n83"],["n83","n84"],["n84","n85"],["n85","n86"],["n86","n87"],["n14","n87"],["n44","n74"],["n88","n89"],["n89","n90"],["n1","n90"],["n61","n88"],["n1","n2"],["n66","n8"],["n5","n6"],["n5","n91"],["n91","n92"],["n92","n93"],["n93","n94"],["n94","n95"],["n95","n96"],["n96","n97"],["n97","n7"],["n7","n98"],["n99","n100"],["n100","n101"],["n99","n9"],["n102","n98"],["n102","n9"],["n101","n10"],["n10","n11"],["n12","n103"],["n105","n106"],["n106","n107"],["n107","n17"],["n104","n12"],["n11","n12"],["n104","n105"],["n105","n18"],["n71","n24"],["n108","n109"],["n109","n110"],["n110","n111"],["n111","n112"],["n112","n113"],["n113","n114"],["n19","n114"],["n108","n60"],["n115","n116"],["n116","n117"],["n117","n118"],["n84","n115"],["n118","n29"],["n119","n120"],["n120","n121"],["n121","n122"],["n122","n123"],["n123","n124"],["n124","n125"],["n125","n126"],["n15","n126"],["n84","n119"],["n129","n130"],["n15","n127"],["n131","n132"],["n132","n28"],["n27","n131"],["n129","n127"],["n33","n26"],["n16","n130"],["n133","n134"],["n134","n135"],["n135","n136"],["n136","n137"],["n133","n19"],["n18","n137"],["n139","n140"],["n140","n141"],["n141","n142"],["n142","n143"],["n143","n144"],["n144","n145"],["n145","n146"],["n146","n147"],["n147","n148"],["n139","n66"],["n146","n138"],["n149","n148"]]};
+
+// ======================= UTILIDADES =======================
+const $ = s => document.querySelector(s);
+const N = {}; MAPA.nodos.forEach(n => N[n.id] = n);
+const rad = x => x * Math.PI / 180, deg = x => x * 180 / Math.PI;
+function dist(a, b) {
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.sqrt(h));
+}
+function rumbo(a, b) {   // 0 = norte, 90 = este
+  const y = Math.sin(rad(b.lng - a.lng)) * Math.cos(rad(b.lat));
+  const x = Math.cos(rad(a.lat)) * Math.sin(rad(b.lat)) - Math.sin(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.cos(rad(b.lng - a.lng));
+  return (deg(Math.atan2(y, x)) + 360) % 360;
+}
+const norm180 = a => ((a + 540) % 360) - 180;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+function proyectar(p, a, b) {   // punto más cercano del tramo a-b a p; t = 0..1 a lo largo del tramo
+  const kx = Math.cos(rad(a.lat)) * 111320, ky = 110540;
+  const bx = (b.lng - a.lng) * kx, by = (b.lat - a.lat) * ky, px = (p.lng - a.lng) * kx, py = (p.lat - a.lat) * ky;
+  const L2 = bx * bx + by * by;
+  const tRaw = L2 ? (px * bx + py * by) / L2 : 0, t = clamp(tRaw, 0, 1);
+  const pt = { lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t };
+  return { pt, t: tRaw, d: dist(p, pt) };
+}
+const m = d => d >= 1000 ? (d / 1000).toFixed(2) + " km" : Math.round(d) + " m";
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function log(t) { const l = $("#log"); const h = new Date().toTimeString().slice(0, 8); l.textContent = (h + "  " + t + "\n" + l.textContent).slice(0, 4000); }
+
+// ======================= RUTA (Dijkstra) =======================
+const ADJ = {}; MAPA.nodos.forEach(n => ADJ[n.id] = []);
+MAPA.caminos.forEach(([a, b]) => { if (N[a] && N[b]) { const d = dist(N[a], N[b]); ADJ[a].push([b, d]); ADJ[b].push([a, d]); } });
+function dijkstra(src) {
+  const D = {}, P = {}, hecho = new Set();
+  for (const k in ADJ) D[k] = Infinity;
+  D[src] = 0;
+  for (;;) {
+    let u = null, best = Infinity;
+    for (const k in D) if (!hecho.has(k) && D[k] < best) { best = D[k]; u = k; }
+    if (u === null) break;
+    hecho.add(u);
+    for (const [v, w] of ADJ[u]) if (D[u] + w < D[v]) { D[v] = D[u] + w; P[v] = u; }
+  }
+  return { D, P };
+}
+// Ruta desde la posición del carro: entra al camino más cercano y sigue la ruta más corta.
+function calcularRuta(pos, destId) {
+  let cerca = null;
+  MAPA.caminos.forEach(([a, b]) => {
+    if (!N[a] || !N[b]) return;
+    const pr = proyectar(pos, N[a], N[b]);
+    if (!cerca || pr.d < cerca.d) cerca = { a, b, pt: pr.pt, d: pr.d };
+  });
+  if (!cerca) return null;
+  const opciones = [cerca.a, cerca.b].map(s => { const r = dijkstra(s); return { s, r, costo: dist(cerca.pt, N[s]) + r.D[destId] }; });
+  const o = opciones[0].costo <= opciones[1].costo ? opciones[0] : opciones[1];
+  if (!isFinite(o.costo)) return null;
+  const ids = [destId];
+  while (ids[0] !== o.s) ids.unshift(o.r.P[ids[0]]);
+  // si el destino está en el mismo tramo, no hace falta ir hasta la punta
+  const base = [cerca.pt, ...ids.map(i => ({ lat: N[i].lat, lng: N[i].lng, id: i }))];
+  // agregar puntos intermedios cada 12 m para que el carro no se aleje del andén en tramos largos
+  const pts = [base[0]];
+  for (let i = 1; i < base.length; i++) {
+    const a = base[i - 1], b = base[i], d = dist(a, b), k = Math.floor(d / 12);
+    for (let j = 1; j <= k; j++) { const t = j / (k + 1); pts.push({ lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t }); }
+    pts.push(b);
+  }
+  return { pts, total: o.costo + cerca.d, destId };
+}
+
+// ======================= ESTADO =======================
+const S = {
+  pos: null, acc: null, rumbo: null,    // del GPS y la brújula (o de la simulación)
+  ruta: null, idx: 0, navegando: false,
+  destId: null, obst: null, obstAviso: false,
+  manual: null, cmd: "S",
+  sim: false, simCar: null, simPuesto: false
+};
+const AJ = { vel: 150, radio: 5, kp: 1.8, off: 0, simX: 5 };
+function ajustes() {
+  AJ.vel = +$("#velIn").value; AJ.radio = +$("#radIn").value; AJ.kp = +$("#kpIn").value; AJ.off = +$("#offIn").value; AJ.simX = +$("#simVel").value;
+  $("#velOut").textContent = AJ.vel + " / 255"; $("#radOut").textContent = AJ.radio + " m"; $("#kpOut").textContent = AJ.kp.toFixed(1);
+  $("#offOut").textContent = (AJ.off > 0 ? "+" : "") + AJ.off + "°"; $("#simOut").textContent = "×" + AJ.simX;
+}
+["#velIn", "#radIn", "#kpIn", "#offIn", "#simVel"].forEach(s => $(s).oninput = ajustes);
+ajustes();
+
+// ======================= MAPA =======================
+const map = L.map("map", { maxZoom: 21 }).setView([4.9422, -74.0120], 17);
+L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 21, maxNativeZoom: 19, attribution: "Imágenes © Esri" }).addTo(map);
+MAPA.caminos.forEach(([a, b]) => { if (N[a] && N[b]) L.polyline([[N[a].lat, N[a].lng], [N[b].lat, N[b].lng]], { color: "#ffc94a", weight: 3, opacity: .55, interactive: false }).addTo(map); });
+const DESTINOS = MAPA.nodos.filter(n => n.tipo === "destino" && n.nombre).sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+DESTINOS.forEach(n => {
+  L.marker([n.lat, n.lng], { icon: L.divIcon({ className: "", html: '<div class="dst"></div>', iconSize: [12, 12], iconAnchor: [6, 6] }) })
+    .bindTooltip(n.nombre, { direction: "top", offset: [0, -6], className: "tt" }).on("click", () => elegirDestino(n.id)).addTo(map);
+  $("#destSel").insertAdjacentHTML("beforeend", `<option value="${n.id}">${esc(n.nombre)}</option>`);
+});
+map.fitBounds(L.latLngBounds(MAPA.nodos.map(n => [n.lat, n.lng])).pad(.05));
+const capaRuta = L.layerGroup().addTo(map);
+const ICONO_CARRO = rot => L.divIcon({ className: "", iconSize: [34, 34], iconAnchor: [17, 17],
+  html: `<div class="car" style="transform:rotate(${rot}deg)"><svg viewBox="0 0 34 34"><circle cx="17" cy="17" r="15" fill="#0f1a33" stroke="#fff" stroke-width="2"/><path d="M17 5 L26 26 L17 21 L8 26 Z" fill="#ffc94a"/></svg></div>` });
+let mkCarro = null, circAcc = null, mkWp = null, mkDest = null, lineaRuta = null;
+function dibujarCarro() {
+  if (!S.pos) return;
+  const ll = [S.pos.lat, S.pos.lng];
+  if (!mkCarro) {
+    circAcc = L.circle(ll, { radius: S.acc || 5, color: "#4cc9f0", weight: 1, fillOpacity: .1, interactive: false }).addTo(map);
+    mkCarro = L.marker(ll, { icon: ICONO_CARRO(S.rumbo || 0), interactive: false, zIndexOffset: 1000 }).addTo(map);
+  } else {
+    mkCarro.setLatLng(ll); circAcc.setLatLng(ll).setRadius(S.acc || 5);
+    const el = mkCarro.getElement(); if (el) el.firstChild.style.transform = `rotate(${S.rumbo || 0}deg)`;
+  }
+}
+function dibujarRuta() {
+  capaRuta.clearLayers(); lineaRuta = mkWp = mkDest = null;
+  if (!S.ruta) return;
+  const pts = S.ruta.pts.map(p => [p.lat, p.lng]);
+  L.polyline(pts, { color: "#0b1326", weight: 10, opacity: .6, interactive: false }).addTo(capaRuta);
+  lineaRuta = L.polyline(pts, { color: "#4cc9f0", weight: 6, interactive: false }).addTo(capaRuta);
+  const d = N[S.ruta.destId];
+  mkDest = L.marker([d.lat, d.lng], { interactive: false, icon: L.divIcon({ className: "", iconSize: [30, 40], iconAnchor: [15, 38],
+    html: '<svg width="30" height="40" viewBox="0 0 30 40"><path d="M15 39C15 39 28 23 28 14A13 13 0 0 0 2 14C2 23 15 39 15 39Z" fill="#e63946" stroke="#fff" stroke-width="2"/><circle cx="15" cy="14" r="5" fill="#fff"/></svg>' }) }).addTo(capaRuta);
+  mkDest.bindTooltip(d.nombre, { permanent: true, direction: "top", offset: [0, -40], className: "tt" });
+  mkWp = L.marker(pts[0], { interactive: false, icon: L.divIcon({ className: "", html: '<div class="wp"></div>', iconSize: [14, 14], iconAnchor: [7, 7] }) }).addTo(capaRuta);
+}
+
+// ======================= DESTINO Y RUTA =======================
+function elegirDestino(id) {
+  S.destId = id; $("#destSel").value = id;
+  if (S.navegando) detener("Ruta cambiada");
+  prepararRuta();
+}
+function prepararRuta() {
+  if (!S.destId) { $("#goBtn").disabled = true; return; }
+  if (!S.pos) { mensaje("Destino listo. Falta la posición del carro: activa el GPS.", "warn"); $("#goBtn").disabled = true; return; }
+  S.ruta = calcularRuta(S.pos, S.destId);
+  if (!S.ruta) { mensaje("No hay camino hasta ese destino en el mapa.", "bad"); $("#goBtn").disabled = true; return; }
+  S.idx = 0; dibujarRuta();
+  $("#goBtn").disabled = false;
+  mensaje(`Ruta a ${N[S.destId].nombre}: ${m(S.ruta.total)}. Pulsa Iniciar ruta.`, "");
+  $("#vFalta").textContent = m(S.ruta.total);
+}
+$("#destSel").onchange = e => e.target.value ? elegirDestino(e.target.value) : null;
+map.on("click", e => {
+  if (S.sim && !S.simPuesto) { ponerSim(e.latlng); return; }
+  let best = null, bd = Infinity;
+  DESTINOS.forEach(n => { const d = dist(n, e.latlng); if (d < bd) { bd = d; best = n; } });
+  if (best && bd < 60) elegirDestino(best.id); else mensaje("Toca más cerca de un destino (punto rojo).", "warn");
+});
+
+function mensaje(t, cls) { const el = $("#msg"); el.textContent = t; el.className = cls || ""; }
+
+$("#goBtn").onclick = async () => {
+  if (!S.ruta) return;
+  prepararRuta();   // recalcula desde donde está el carro ahora
+  if (!S.ruta) return;
+  if (!bt.ok && !S.sim) mensaje("Ojo: el carro no está conectado por Bluetooth. La ruta corre pero el carro no se moverá.", "warn");
+  S.navegando = true; S.manual = null;
+  pedirPantallaEncendida();
+  log("Ruta iniciada a " + N[S.destId].nombre + " (" + m(S.ruta.total) + ")");
+};
+$("#stopBtn").onclick = () => detener("Detenido");
+function detener(t) {
+  S.navegando = false; S.cmd = "S"; enviarAhora("S");
+  mensaje(t + ".", "warn"); log(t);
+}
+
+// ======================= NAVEGACIÓN (cada 200 ms) =======================
+function pasoNavegacion() {
+  const R = S.ruta, p = S.pos;
+  if (!R || !p) return "S";
+  if (S.rumbo === null) { mensaje("Sin brújula: no sé hacia dónde mira el carro.", "bad"); return "S"; }
+  const pts = R.pts, ult = pts.length - 1;
+  // avanzar al siguiente punto si ya llegó a este o ya lo pasó
+  while (S.idx < ult) {
+    if (dist(p, pts[S.idx]) < AJ.radio) { S.idx++; continue; }
+    if (S.idx > 0 && proyectar(p, pts[S.idx - 1], pts[S.idx]).t > 1) { S.idx++; continue; }
+    break;
+  }
+  const dObj = dist(p, pts[S.idx]);
+  let falta = dObj; for (let i = S.idx; i < ult; i++) falta += dist(pts[i], pts[i + 1]);
+  $("#vFalta").textContent = m(falta);
+  $("#vSig").textContent = m(dObj);
+  if (mkWp) mkWp.setLatLng([pts[S.idx].lat, pts[S.idx].lng]);
+  if (S.idx === ult && dObj < AJ.radio) {
+    S.navegando = false;
+    mensaje("¡Llegamos a " + N[R.destId].nombre + "!", "ok"); log("Llegada a " + N[R.destId].nombre);
+    $("#vErr").textContent = "–";
+    return "S";
+  }
+  const err = norm180(rumbo(p, pts[S.idx]) - S.rumbo);   // + = el punto está a la derecha
+  $("#vErr").textContent = Math.abs(err) < 8 ? "recto" : (err > 0 ? "→ " : "← ") + Math.round(Math.abs(err)) + "°";
+  if (S.obst !== null && S.obst < 25) { mensaje("Obstáculo adelante: esperando que se despeje…", "warn"); }
+  else mensaje("Rumbo a " + N[R.destId].nombre, "ok");
+  // giro en su sitio si el punto está muy de lado; si no, avanza corrigiendo
+  if (Math.abs(err) > 45) {
+    const g = Math.round(clamp(AJ.vel * 0.85, 90, 200));
+    return err > 0 ? `M${g},${-g}` : `M${-g},${g}`;
+  }
+  const corr = AJ.kp * err;
+  const izq = Math.round(clamp(AJ.vel + corr, -255, 255)), der = Math.round(clamp(AJ.vel - corr, -255, 255));
+  return `M${izq},${der}`;
+}
+
+const MANUAL = { F: v => `M${v},${v}`, B: v => `M${-v},${-v}`, L: v => `M${-v},${v}`, R: v => `M${v},${-v}` };
+document.querySelectorAll("[data-man]").forEach(b => {
+  const on = e => { e.preventDefault(); if (S.navegando) detener("Ruta pausada por control manual"); S.manual = b.dataset.man; };
+  const off = () => { S.manual = null; S.cmd = "S"; enviarAhora("S"); };
+  b.addEventListener("pointerdown", on); b.addEventListener("pointerup", off); b.addEventListener("pointerleave", off); b.addEventListener("pointercancel", off);
+});
+
+let ultimoTick = performance.now();
+setInterval(() => {
+  const ahora = performance.now(), dt = (ahora - ultimoTick) / 1000; ultimoTick = ahora;
+  // en simulación se repite el ciclo de control varias veces por tick (rapidez ×N) con el mismo paso de 0.2 s
+  const vueltas = S.sim ? AJ.simX : 1;
+  for (let k = 0; k < vueltas; k++) {
+    if (S.manual) S.cmd = MANUAL[S.manual](Math.round(AJ.vel));
+    else if (S.navegando) S.cmd = pasoNavegacion();
+    else S.cmd = "S";
+    if (S.sim) pasoSim(0.2);
+  }
+  enviar(S.cmd);
+  $("#vRumbo").textContent = S.rumbo === null ? "–" : Math.round(S.rumbo) + "°";
+  $("#vAcc").textContent = S.acc == null ? "–" : "±" + Math.round(S.acc) + " m";
+  $("#vObs").textContent = S.obst === null ? "–" : (S.obst >= 400 ? "libre" : S.obst + " cm");
+}, 200);
+
+// ======================= BLUETOOTH (JDY-16) =======================
+const SERV = 0xffe0, CARACT = 0xffe1;
+const bt = { ok: false, car: null, dev: null, ocupado: false, pendiente: null, rx: "" };
+$("#btBtn").onclick = () => conectarBT(false);
+$("#btAllBtn").onclick = () => conectarBT(true);
+async function conectarBT(todos) {
+  if (!navigator.bluetooth) { mensaje("Este navegador no tiene Bluetooth web. Usa Chrome en Android y abre la página con https.", "bad"); return; }
+  // por defecto solo muestra módulos tipo JDY-16 / HM-10; "ver todos" muestra cualquier dispositivo
+  const filtros = [{ services: [SERV] }, { namePrefix: "JDY" }, { namePrefix: "BT0" }, { namePrefix: "HM" }, { namePrefix: "MLT" }, { namePrefix: "LAFVIN" }];
+  try {
+    bt.dev = await navigator.bluetooth.requestDevice(todos ? { acceptAllDevices: true, optionalServices: [SERV] } : { filters: filtros, optionalServices: [SERV] });
+    bt.dev.addEventListener("gattserverdisconnected", () => {
+      bt.ok = false; chip("#chipBt", "Carro: desconectado", "bad"); log("Bluetooth desconectado");
+      if (S.navegando) detener("Se perdió la conexión con el carro");
+    });
+    chip("#chipBt", "Carro: conectando…", "warn");
+    const srv = await bt.dev.gatt.connect();
+    const s = await srv.getPrimaryService(SERV);
+    bt.car = await s.getCharacteristic(CARACT);
+    await bt.car.startNotifications();
+    bt.car.addEventListener("characteristicvaluechanged", e => recibir(new TextDecoder().decode(e.target.value)));
+    bt.ok = true; chip("#chipBt", "Carro: conectado", "ok"); log("Conectado a " + (bt.dev.name || "carro"));
+  } catch (e) {
+    if (bt.ok) { mensaje("El carro sigue conectado.", "ok"); return; }
+    chip("#chipBt", "Carro: sin conectar", "bad");
+    mensaje(e.name === "NotFoundError" ? "No se eligió ningún dispositivo." : "No se pudo conectar: " + e.message + ". ¿Está encendido el carro y puesto el JDY-16?", "bad");
+    log("Error Bluetooth: " + e.message);
+  }
+}
+function recibir(txt) {
+  bt.rx += txt;
+  let i;
+  while ((i = bt.rx.indexOf("\n")) >= 0) {
+    const l = bt.rx.slice(0, i).trim(); bt.rx = bt.rx.slice(i + 1);
+    if (l[0] === "D") S.obst = parseInt(l.slice(1), 10);
+    else if (l === "O") log("El carro frenó por un obstáculo");
+  }
+  if (bt.rx.length > 200) bt.rx = "";
+}
+let ultimoEnviado = "", repetidos = 0;
+function enviar(cmd) {
+  if (!bt.ok || S.sim) return;
+  // reenvía la misma orden cada 200 ms para que el Arduino sepa que la página sigue viva
+  if (bt.ocupado) { bt.pendiente = cmd; return; }
+  escribir(cmd);
+}
+function enviarAhora(cmd) { if (bt.ok) { if (bt.ocupado) bt.pendiente = cmd; else escribir(cmd); } }
+async function escribir(cmd) {
+  bt.ocupado = true;
+  try {
+    const data = new TextEncoder().encode(cmd + "\n");
+    if (bt.car.properties.writeWithoutResponse) await bt.car.writeValueWithoutResponse(data);
+    else await bt.car.writeValue(data);
+  } catch (e) { log("Error al enviar: " + e.message); }
+  bt.ocupado = false;
+  if (bt.pendiente) { const p = bt.pendiente; bt.pendiente = null; escribir(p); }
+}
+
+// ======================= GPS Y BRÚJULA =======================
+function chip(sel, t, cls) { const c = $(sel); c.textContent = t; c.className = "chip " + (cls || ""); }
+let rumboX = null, rumboY = null;
+function nuevaBrujula(h) {
+  if (S.sim) return;
+  // promedio circular para suavizar la brújula
+  const x = Math.cos(rad(h)), y = Math.sin(rad(h));
+  if (rumboX === null) { rumboX = x; rumboY = y; } else { rumboX += .3 * (x - rumboX); rumboY += .3 * (y - rumboY); }
+  S.rumbo = (deg(Math.atan2(rumboY, rumboX)) + AJ.off + 720) % 360;
+  chip("#chipBru", "Brújula: " + Math.round(S.rumbo) + "°", "ok");
+  dibujarCarro();
+}
+function onOrientacion(e) {
+  if (e.webkitCompassHeading != null) nuevaBrujula(e.webkitCompassHeading);
+  else if (e.absolute && e.alpha != null) nuevaBrujula(360 - e.alpha);
+}
+let gpsId = null;
+$("#senBtn").onclick = async () => {
+  if (S.sim) { mensaje("Apaga el modo simulación para usar el GPS real.", "warn"); return; }
+  try { if (window.DeviceOrientationEvent && DeviceOrientationEvent.requestPermission) await DeviceOrientationEvent.requestPermission(); } catch (e) {}
+  window.addEventListener("deviceorientationabsolute", onOrientacion);
+  window.addEventListener("deviceorientation", onOrientacion);
+  if (!navigator.geolocation) { chip("#chipGps", "GPS: no disponible", "bad"); return; }
+  if (gpsId !== null) return;
+  chip("#chipGps", "GPS: buscando…", "warn");
+  let primera = true;
+  gpsId = navigator.geolocation.watchPosition(p => {
+    S.pos = { lat: p.coords.latitude, lng: p.coords.longitude }; S.acc = p.coords.accuracy;
+    chip("#chipGps", "GPS: ±" + Math.round(S.acc) + " m", S.acc <= 8 ? "ok" : "warn");
+    dibujarCarro();
+    if (primera) { primera = false; map.setView([S.pos.lat, S.pos.lng], 19); if (S.destId && !S.navegando) prepararRuta(); }
+  }, err => {
+    chip("#chipGps", "GPS: error", "bad");
+    mensaje(err.code === 1 ? "Permiso de ubicación negado. Actívalo en el candado de la barra de direcciones." : "No llega señal GPS. Sal a un lugar abierto.", "bad");
+  }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+  setTimeout(() => { if (S.rumbo === null && !S.sim) chip("#chipBru", "Brújula: sin datos", "bad"); }, 4000);
+  pedirPantallaEncendida();
+};
+let wake = null;
+async function pedirPantallaEncendida() { try { if ("wakeLock" in navigator && !wake) { wake = await navigator.wakeLock.request("screen"); wake.addEventListener("release", () => wake = null); } } catch (e) {} }
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && S.navegando) pedirPantallaEncendida(); });
+
+// ======================= SIMULACIÓN =======================
+$("#simChk").onchange = e => {
+  S.sim = e.target.checked; S.simPuesto = false;
+  if (S.navegando) detener("Modo cambiado");
+  if (S.sim) { mensaje("Simulación: toca el mapa donde quieres poner el carro.", "warn"); chip("#chipGps", "GPS: simulado", "warn"); chip("#chipBru", "Brújula: simulada", "warn"); }
+  else { S.pos = null; S.rumbo = null; mensaje("Simulación apagada.", ""); }
+};
+function ponerSim(ll) {
+  S.simCar = { lat: ll.lat, lng: ll.lng, h: 0 }; S.simPuesto = true;
+  S.pos = { lat: ll.lat, lng: ll.lng }; S.acc = 3; S.rumbo = 0;
+  dibujarCarro(); mensaje("Carro simulado listo. Elige un destino.", "");
+  if (S.destId) prepararRuta();
+}
+function pasoSim(dt) {
+  if (!S.simCar) return;
+  let izq = 0, der = 0;
+  const mm = /^M(-?\d+),(-?\d+)$/.exec(S.cmd); if (mm) { izq = +mm[1]; der = +mm[2]; }
+  const v = (izq + der) / 2 / 255 * 0.5;        // m/s (hasta 0.5 m/s)
+  const w = (izq - der) / 255 * 120;             // grados/s
+  const c = S.simCar;
+  c.h = (c.h + w * dt + 360) % 360;
+  c.lat += v * dt * Math.cos(rad(c.h)) / 110540;
+  c.lng += v * dt * Math.sin(rad(c.h)) / (111320 * Math.cos(rad(c.lat)));
+  S.pos = { lat: c.lat, lng: c.lng }; S.rumbo = c.h;
+  dibujarCarro();
+}
+
+if (!navigator.bluetooth) log("Bluetooth web no disponible en este navegador (necesita Chrome en Android con https).");
+log("Mapa cargado: " + MAPA.nodos.length + " puntos, " + MAPA.caminos.length + " caminos, " + DESTINOS.length + " destinos.");
+</script>
+</body>
+</html>
