@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Carro Guía · Monitor</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Monitor en vivo: mapa grande a la izquierda, tablero de telemetría a la derecha (abajo en celular). */
+:root{
+  --bg:#0f1a33; --panel:#172446; --panel2:#1f2f5a; --line:#2c3d6b;
+  --fg:#eef2fa; --muted:#9daacb; --accent:#e63946; --path:#ffc94a;
+  --ok:#2fbf71; --warn:#ff9f1c; --route:#4cc9f0; --trail:#c77dff;
+  --font:"Rubik",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.45 var(--font)}
+button,input{font:inherit;color:inherit}
+#app{display:grid;height:100%;grid-template-columns:1fr 420px;grid-template-rows:auto 1fr;grid-template-areas:"head head" "map panel"}
+header{grid-area:head;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--panel);border-bottom:1px solid var(--line);
+  padding:10px max(16px,env(safe-area-inset-right,0px)) 10px max(16px,env(safe-area-inset-left,0px));padding-top:max(10px,env(safe-area-inset-top,0px))}
+header h1{margin:0;font-size:18px;font-weight:700}
+header h1 span{color:var(--route)}
+#chips{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);background:var(--panel2);border-radius:999px;padding:3px 10px;font-size:13px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.chip.ok{border-color:var(--ok);color:var(--ok)} .chip.warn{border-color:var(--warn);color:var(--warn)} .chip.bad{border-color:var(--accent);color:#ff8a93}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:currentColor;margin-right:6px;vertical-align:1px}
+.chip.ok .dot{animation:pulso 1.4s infinite}
+@keyframes pulso{50%{opacity:.25}}
+#mapwrap{grid-area:map;position:relative;min-height:0}
+#map{position:absolute;inset:0;background:#0b1326}
+#mapBtns{position:absolute;right:calc(12px + env(safe-area-inset-right,0px));bottom:calc(26px + env(safe-area-inset-bottom,0px));z-index:1000;display:flex;gap:6px}
+#panel{grid-area:panel;overflow-y:auto;background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;gap:14px;min-width:0;
+  padding:16px max(16px,env(safe-area-inset-right,0px)) calc(16px + env(safe-area-inset-bottom,0px)) 16px}
+h2{margin:0;font-size:12px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+.card{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:12px}
+#estadoCard{border-left:5px solid var(--muted)}
+#estadoCard.ruta{border-left-color:var(--ok)} #estadoCard.manual{border-left-color:var(--route)} #estadoCard.quieto{border-left-color:var(--warn)} #estadoCard.off{border-left-color:var(--accent)}
+#estado{font-size:22px;font-weight:700;line-height:1.2;text-wrap:balance}
+#msgCarro{font-size:14px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px 10px}
+.kv{display:flex;flex-direction:column;gap:2px;min-width:0}
+.kv span{font-size:12px;color:var(--muted)}
+.kv b{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar{height:10px;border-radius:6px;background:var(--bg);position:relative;overflow:hidden}
+.bar i{position:absolute;top:0;bottom:0;border-radius:6px;transition:all .4s}
+.mot{display:grid;grid-template-columns:auto 1fr 44px;gap:8px 10px;align-items:center;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.mot .bar::after{content:"";position:absolute;left:50%;top:-2px;bottom:-2px;width:2px;background:var(--line)}
+.mot b{color:var(--fg);text-align:right;font-weight:600}
+#obsTxt{font-size:13px;color:var(--muted);display:flex;justify-content:space-between}
+.btn{border:1px solid var(--line);background:var(--panel2);border-radius:12px;padding:9px 13px;cursor:pointer;font-weight:500}
+.btn:hover{border-color:var(--muted)}
+.btn[aria-pressed="true"]{border-color:var(--route);color:var(--route)}
+.btn:focus-visible{outline:2px solid var(--route);outline-offset:2px}
+.btn.stop{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700;font-size:17px;padding:14px;width:100%}
+.btn.stop.armed{background:#fff;color:var(--accent)}
+.help{margin:0;font-size:13px;color:var(--muted)}
+#eventos{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:220px;overflow-y:auto}
+#eventos li{display:grid;grid-template-columns:64px 1fr;gap:8px;font-size:14px}
+#eventos time{color:var(--muted);font-variant-numeric:tabular-nums;font-size:13px}
+details{border-top:1px solid var(--line);padding-top:12px}
+summary{cursor:pointer;font-size:12px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+details[open] summary{margin-bottom:10px}
+input[type=text]{flex:1;min-width:0;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:9px 11px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.car{width:36px;height:36px} .car svg{width:36px;height:36px;filter:drop-shadow(0 1px 3px rgba(0,0,0,.8))}
+.dst{width:12px;height:12px;border-radius:50%;background:var(--accent);border:2px solid #fff}
+.leaflet-tooltip.tt{background:var(--bg);color:var(--fg);border:1px solid var(--line);font:500 12px var(--font);padding:2px 7px;border-radius:8px}
+.leaflet-tooltip.tt::before{display:none}
+.vacio{color:var(--muted);font-size:14px}
+@media (max-width:820px){
+  #app{grid-template-columns:1fr;grid-template-rows:auto 45vh 1fr;grid-template-areas:"head" "map" "panel"}
+  #panel{border-left:0;border-top:1px solid var(--line);padding-left:max(16px,env(safe-area-inset-left,0px))}
+  header h1{font-size:16px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Carro Guía · <span>Monitor</span></h1>
+    <div id="chips">
+      <span class="chip" id="chipSrv"><span class="dot"></span>Servidor: conectando…</span>
+      <span class="chip" id="chipCar"><span class="dot"></span>Carro: esperando datos</span>
+    </div>
+  </header>
+  <div id="mapwrap">
+    <div id="map"></div>
+    <div id="mapBtns">
+      <button class="btn" id="seguirBtn" aria-pressed="true">Seguir al carro</button>
+      <button class="btn" id="limpiarBtn">Borrar recorrido</button>
+    </div>
+  </div>
+  <aside id="panel">
+    <section class="card" id="estadoCard" aria-live="polite">
+      <div>
+        <div id="estado">Esperando datos del carro…</div>
+        <div id="msgCarro">Abre la página del carro en su celular con el mismo código.</div>
+      </div>
+      <div class="grid">
+        <div class="kv"><span>Destino</span><b id="vDest">–</b></div>
+        <div class="kv"><span>Falta</span><b id="vFalta">–</b></div>
+        <div class="kv"><span>Velocidad</span><b id="vVel">–</b></div>
+        <div class="kv"><span>Recorrido</span><b id="vRec">–</b></div>
+        <div class="kv"><span>Tiempo en ruta</span><b id="vTiempo">–</b></div>
+        <div class="kv"><span>Siguiente punto</span><b id="vSig">–</b></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Sensores del carro</h2>
+      <div class="grid">
+        <div class="kv"><span>Precisión GPS</span><b id="vAcc">–</b></div>
+        <div class="kv"><span>Rumbo</span><b id="vRumbo">–</b></div>
+        <div class="kv"><span>Corrección</span><b id="vErr">–</b></div>
+        <div class="kv"><span>Bluetooth</span><b id="vBt">–</b></div>
+        <div class="kv"><span>Batería celular</span><b id="vBat">–</b></div>
+        <div class="kv"><span>Posición</span><b id="vPos" style="font-size:13px">–</b></div>
+      </div>
+      <div>
+        <div id="obsTxt"><span>Obstáculo al frente (ultrasónico)</span><b id="vObs">–</b></div>
+        <div class="bar" style="margin-top:6px"><i id="obsBar" style="left:0;width:0"></i></div>
+      </div>
+      <div class="mot">
+        <span>Rueda izq.</span><div class="bar"><i id="barIzq"></i></div><b id="vIzq">0</b>
+        <span>Rueda der.</span><div class="bar"><i id="barDer"></i></div><b id="vDer">0</b>
+      </div>
+    </section>
+
+    <section class="card">
+      <button class="btn stop" id="stopBtn">Parada de emergencia</button>
+      <p class="help">Detiene el carro a distancia. Toca dos veces para confirmar.</p>
+    </section>
+
+    <section class="card">
+      <h2>Eventos</h2>
+      <ul id="eventos"><li class="vacio">Aquí aparecen la salida, la llegada, los obstáculos y las desconexiones.</li></ul>
+    </section>
+
+    <details>
+      <summary>Ajustes</summary>
+      <div class="row" style="margin-top:4px">
+        <label for="idIn" class="help" style="width:100%">Código del carro (el mismo de la página del carro)</label>
+        <input type="text" id="idIn" maxlength="40"><button class="btn" id="idBtn">Ver este carro</button>
+      </div>
+    </details>
+  </aside>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script>
+"use strict";
+const MAPA = {"version":1,"nombre":"Campus UMNG Cajicá","nodos":[{"id":"n1","lat":4.9429405,"lng":-74.0107352,"nombre":"Edificio Jose Maria Cabal","tipo":"destino"},{"id":"n2","lat":4.9426264,"lng":-74.0107781,"nombre":"Aulas B","tipo":"destino"},{"id":"n3","lat":4.9422098,"lng":-74.0105367,"nombre":"Aulas A","tipo":"destino"},{"id":"n4","lat":4.9422043,"lng":-74.0103596,"nombre":"cafeteria Arepas","tipo":"destino"},{"id":"n5","lat":4.9418197,"lng":-74.0106601,"nombre":"Papeleria y BBVA","tipo":"destino"},{"id":"n6","lat":4.9418784,"lng":-74.0110087,"nombre":"Edificio Jose Celestino Mutis","tipo":"destino"},{"id":"n7","lat":4.941257,"lng":-74.0101987,"nombre":"cafeteria del D","tipo":"destino"},{"id":"n8","lat":4.9414832,"lng":-74.0108961,"nombre":"parqueadero central","tipo":"destino"},{"id":"n9","lat":4.9410912,"lng":-74.010365,"nombre":"1 entrada aulas d","tipo":"destino"},{"id":"n10","lat":4.9404873,"lng":-74.0105259,"nombre":"Aulas E","tipo":"destino"},{"id":"n11","lat":4.9403538,"lng":-74.0105796,"nombre":"Cafeteria E 3 piso","tipo":"cruce"},{"id":"n12","lat":4.9402042,"lng":-74.0106064,"nombre":"Coase 3 piso","tipo":"cruce"},{"id":"n13","lat":4.9439242,"lng":-74.0120816,"nombre":"Concha acustica","tipo":"destino"},{"id":"n14","lat":4.9450675,"lng":-74.012382,"nombre":"restaurante y cafeteria de canchas","tipo":"destino"},{"id":"n15","lat":4.9462056,"lng":-74.013707,"nombre":"parqueadero canchas","tipo":"destino"},{"id":"n16","lat":4.9466116,"lng":-74.0141201,"nombre":"Centro Literario fernando soto","tipo":"destino"},{"id":"n17","lat":4.9396109,"lng":-74.0103436,"nombre":"Fase 1","tipo":"destino"},{"id":"n18","lat":4.9398461,"lng":-74.0108103,"nombre":"Fase 2","tipo":"destino"},{"id":"n19","lat":4.9397284,"lng":-74.0116471,"nombre":"Centro de estudios en infraestructura vial","tipo":"destino"},{"id":"n20","lat":4.9399392,"lng":-74.0131652,"nombre":"parqueadero Pajarraco","tipo":"destino"},{"id":"n21","lat":4.9414562,"lng":-74.0119314,"nombre":"capilla","tipo":"destino"},{"id":"n22","lat":4.9414562,"lng":-74.0118027,"nombre":"cafeteria c","tipo":"destino"},{"id":"n23","lat":4.9413654,"lng":-74.0116417,"nombre":"Auditorio D","tipo":"destino"},{"id":"n24","lat":4.9407921,"lng":-74.0123767,"nombre":"Facultad de estudios a distancia","tipo":"destino"},{"id":"n25","lat":4.9409311,"lng":-74.011969,"nombre":"hemiciclos","tipo":"destino"},{"id":"n26","lat":4.942273,"lng":-74.0125859,"nombre":"lago central","tipo":"cruce"},{"id":"n27","lat":4.9419264,"lng":-74.011969,"nombre":"biblioteca","tipo":"destino"},{"id":"n28","lat":4.9421227,"lng":-74.0115881,"nombre":"aulas C","tipo":"destino"},{"id":"n29","lat":4.9449291,"lng":-74.0136802,"nombre":"canchas","tipo":"cruce"},{"id":"n30","lat":4.9429799,"lng":-74.0155309,"nombre":"ENRADA UMNG","tipo":"destino"},{"id":"n31","lat":4.9426786,"lng":-74.0145707,"nombre":"banderas","tipo":"cruce"},{"id":"n32","lat":4.9423954,"lng":-74.0129399,"nombre":"el potro","tipo":"cruce"},{"id":"n33","lat":4.9422162,"lng":-74.012382,"nombre":"","tipo":"cruce"},{"id":"n34","lat":4.942291,"lng":-74.0122157,"nombre":"","tipo":"cruce"},{"id":"n35","lat":4.9424886,"lng":-74.0121406,"nombre":"","tipo":"cruce"},{"id":"n36","lat":4.9426488,"lng":-74.0120441,"nombre":"","tipo":"cruce"},{"id":"n37","lat":4.9427664,"lng":-74.01191,"nombre":"","tipo":"cruce"},{"id":"n38","lat":4.9427931,"lng":-74.0117598,"nombre":"","tipo":"cruce"},{"id":"n39","lat":4.9427717,"lng":-74.0116149,"nombre":"","tipo":"cruce"},{"id":"n40","lat":4.9426968,"lng":-74.0112984,"nombre":"","tipo":"cruce"},{"id":"n41","lat":4.9431402,"lng":-74.0113038,"nombre":"","tipo":"cruce"},{"id":"n42","lat":4.9434446,"lng":-74.0113842,"nombre":"","tipo":"cruce"},{"id":"n43","lat":4.9437544,"lng":-74.0115505,"nombre":"","tipo":"cruce"},{"id":"n44","lat":4.9440055,"lng":-74.0117329,"nombre":"","tipo":"cruce"},{"id":"n45","lat":4.9425956,"lng":-74.0113038,"nombre":"sillas lago","tipo":"cruce"},{"id":"n46","lat":4.9423232,"lng":-74.0113789,"nombre":"","tipo":"cruce"},{"id":"n47","lat":4.9422965,"lng":-74.0115345,"nombre":"","tipo":"cruce"},{"id":"n48","lat":4.9423364,"lng":-74.0144742,"nombre":"","tipo":"cruce"},{"id":"n49","lat":4.9417624,"lng":-74.0144312,"nombre":"","tipo":"cruce"},{"id":"n50","lat":4.9414472,"lng":-74.0143776,"nombre":"","tipo":"cruce"},{"id":"n51","lat":4.9412496,"lng":-74.01434,"nombre":"","tipo":"cruce"},{"id":"n52","lat":4.941084,"lng":-74.0142274,"nombre":"","tipo":"cruce"},{"id":"n53","lat":4.9409238,"lng":-74.0141416,"nombre":"","tipo":"cruce"},{"id":"n54","lat":4.9408116,"lng":-74.0140826,"nombre":"","tipo":"cruce"},{"id":"n55","lat":4.940653,"lng":-74.0139753,"nombre":"","tipo":"cruce"},{"id":"n56","lat":4.940443,"lng":-74.0138036,"nombre":"","tipo":"cruce"},{"id":"n57","lat":4.9403415,"lng":-74.0136319,"nombre":"","tipo":"cruce"},{"id":"n58","lat":4.9402454,"lng":-74.0134925,"nombre":"","tipo":"cruce"},{"id":"n59","lat":4.9401653,"lng":-74.0133691,"nombre":"","tipo":"cruce"},{"id":"n60","lat":4.9401708,"lng":-74.013235,"nombre":"","tipo":"cruce"},{"id":"n61","lat":4.942707,"lng":-74.0111375,"nombre":"","tipo":"cruce"},{"id":"n62","lat":4.9426002,"lng":-74.0104991,"nombre":"","tipo":"cruce"},{"id":"n63","lat":4.9424397,"lng":-74.0105152,"nombre":"","tipo":"cruce"},{"id":"n64","lat":4.9422207,"lng":-74.0112501,"nombre":"","tipo":"cruce"},{"id":"n65","lat":4.9419109,"lng":-74.0112877,"nombre":"","tipo":"cruce"},{"id":"n66","lat":4.9415531,"lng":-74.0113896,"nombre":"","tipo":"cruce"},{"id":"n67","lat":4.9412379,"lng":-74.0115398,"nombre":"","tipo":"cruce"},{"id":"n68","lat":4.9410243,"lng":-74.0116739,"nombre":"","tipo":"cruce"},{"id":"n69","lat":4.9408266,"lng":-74.011808,"nombre":"","tipo":"cruce"},{"id":"n70","lat":4.940661,"lng":-74.0119582,"nombre":"","tipo":"cruce"},{"id":"n71","lat":4.9407038,"lng":-74.012087,"nombre":"","tipo":"cruce"},{"id":"n72","lat":4.9408213,"lng":-74.0120494,"nombre":"","tipo":"cruce"},{"id":"n73","lat":4.9409067,"lng":-74.0118992,"nombre":"","tipo":"cruce"},{"id":"n74","lat":4.9441234,"lng":-74.0117168,"nombre":"","tipo":"cruce"},{"id":"n75","lat":4.9442355,"lng":-74.0118456,"nombre":"","tipo":"cruce"},{"id":"n76","lat":4.9442569,"lng":-74.0119636,"nombre":"","tipo":"cruce"},{"id":"n77","lat":4.9442729,"lng":-74.0122426,"nombre":"","tipo":"cruce"},{"id":"n78","lat":4.9442623,"lng":-74.0124625,"nombre":"","tipo":"cruce"},{"id":"n79","lat":4.944321,"lng":-74.0125859,"nombre":"","tipo":"cruce"},{"id":"n80","lat":4.9442783,"lng":-74.0126932,"nombre":"","tipo":"cruce"},{"id":"n81","lat":4.944321,"lng":-74.0128005,"nombre":"","tipo":"cruce"},{"id":"n82","lat":4.9444065,"lng":-74.0128917,"nombre":"","tipo":"cruce"},{"id":"n83","lat":4.9445186,"lng":-74.012897,"nombre":"","tipo":"cruce"},{"id":"n84","lat":4.9446735,"lng":-74.0128273,"nombre":"","tipo":"cruce"},{"id":"n85","lat":4.9446094,"lng":-74.0127307,"nombre":"","tipo":"cruce"},{"id":"n86","lat":4.9448284,"lng":-74.0126395,"nombre":"","tipo":"cruce"},{"id":"n87","lat":4.9449887,"lng":-74.0125591,"nombre":"","tipo":"cruce"},{"id":"n88","lat":4.9428678,"lng":-74.0111589,"nombre":"","tipo":"cruce"},{"id":"n89","lat":4.942996,"lng":-74.0111697,"nombre":"","tipo":"cruce"},{"id":"n90","lat":4.9430868,"lng":-74.0111965,"nombre":"","tipo":"cruce"},{"id":"n91","lat":4.9418364,"lng":-74.0105152,"nombre":"","tipo":"cruce"},{"id":"n92","lat":4.9418257,"lng":-74.0103865,"nombre":"","tipo":"cruce"},{"id":"n93","lat":4.9416547,"lng":-74.0103811,"nombre":"","tipo":"cruce"},{"id":"n94","lat":4.9415533,"lng":-74.010424,"nombre":"","tipo":"cruce"},{"id":"n95","lat":4.9415372,"lng":-74.0103328,"nombre":"","tipo":"cruce"},{"id":"n96","lat":4.9414838,"lng":-74.0102524,"nombre":"","tipo":"cruce"},{"id":"n97","lat":4.941361,"lng":-74.0102202,"nombre":"","tipo":"cruce"},{"id":"n98","lat":4.9412808,"lng":-74.0102684,"nombre":"","tipo":"cruce"},{"id":"n99","lat":4.9409704,"lng":-74.0104133,"nombre":"","tipo":"cruce"},{"id":"n100","lat":4.9407781,"lng":-74.0104562,"nombre":"","tipo":"cruce"},{"id":"n101","lat":4.9405804,"lng":-74.0105045,"nombre":"","tipo":"cruce"},{"id":"n102","lat":4.941216,"lng":-74.0103328,"nombre":"","tipo":"cruce"},{"id":"n103","lat":4.9400776,"lng":-74.0106601,"nombre":"salida Aulas e","tipo":"destino"},{"id":"n104","lat":4.9399708,"lng":-74.0106708,"nombre":"","tipo":"cruce"},{"id":"n105","lat":4.9398479,"lng":-74.0106922,"nombre":"","tipo":"cruce"},{"id":"n106","lat":4.9397945,"lng":-74.0105313,"nombre":"","tipo":"cruce"},{"id":"n107","lat":4.9396877,"lng":-74.0104347,"nombre":"","tipo":"cruce"},{"id":"n108","lat":4.9400083,"lng":-74.013015,"nombre":"","tipo":"cruce"},{"id":"n109","lat":4.9400083,"lng":-74.0128434,"nombre":"","tipo":"cruce"},{"id":"n110","lat":4.9400564,"lng":-74.0126878,"nombre":"","tipo":"cruce"},{"id":"n111","lat":4.9400136,"lng":-74.0125537,"nombre":"","tipo":"cruce"},{"id":"n112","lat":4.9399602,"lng":-74.0124249,"nombre":"","tipo":"cruce"},{"id":"n113","lat":4.9399122,"lng":-74.0122265,"nombre":"","tipo":"cruce"},{"id":"n114","lat":4.939816,"lng":-74.0118992,"nombre":"","tipo":"cruce"},{"id":"n115","lat":4.9446959,"lng":-74.0130043,"nombre":"","tipo":"cruce"},{"id":"n116","lat":4.944744,"lng":-74.0131652,"nombre":"","tipo":"cruce"},{"id":"n117","lat":4.9448081,"lng":-74.0133423,"nombre":"","tipo":"cruce"},{"id":"n118","lat":4.9448668,"lng":-74.0135354,"nombre":"","tipo":"cruce"},{"id":"n119","lat":4.9448775,"lng":-74.0127629,"nombre":"","tipo":"cruce"},{"id":"n120","lat":4.9451125,"lng":-74.0126395,"nombre":"","tipo":"cruce"},{"id":"n121","lat":4.9452247,"lng":-74.0125537,"nombre":"","tipo":"cruce"},{"id":"n122","lat":4.9453582,"lng":-74.0127575,"nombre":"","tipo":"cruce"},{"id":"n123","lat":4.9454864,"lng":-74.0130794,"nombre":"","tipo":"cruce"},{"id":"n124","lat":4.9456253,"lng":-74.0134335,"nombre":"","tipo":"cruce"},{"id":"n125","lat":4.9457428,"lng":-74.0137124,"nombre":"","tipo":"cruce"},{"id":"n126","lat":4.9458443,"lng":-74.0138787,"nombre":"","tipo":"cruce"},{"id":"n127","lat":4.9462342,"lng":-74.0138519,"nombre":"","tipo":"cruce"},{"id":"n129","lat":4.9464746,"lng":-74.013986,"nombre":"","tipo":"cruce"},{"id":"n130","lat":4.9465013,"lng":-74.0140933,"nombre":"","tipo":"cruce"},{"id":"n131","lat":4.941847,"lng":-74.0118134,"nombre":"","tipo":"cruce"},{"id":"n132","lat":4.9418214,"lng":-74.0117128,"nombre":"","tipo":"cruce"},{"id":"n133","lat":4.9396569,"lng":-74.0114594,"nombre":"","tipo":"cruce"},{"id":"n134","lat":4.9397424,"lng":-74.0113467,"nombre":"","tipo":"cruce"},{"id":"n135","lat":4.9398973,"lng":-74.0112984,"nombre":"","tipo":"cruce"},{"id":"n136","lat":4.9398171,"lng":-74.0111107,"nombre":"","tipo":"cruce"},{"id":"n137","lat":4.9397851,"lng":-74.0109766,"nombre":"","tipo":"cruce"},{"id":"n138","lat":4.9408907,"lng":-74.0107781,"nombre":"2 entrada aulas D","tipo":"destino"},{"id":"n139","lat":4.9414355,"lng":-74.0113252,"nombre":"","tipo":"cruce"},{"id":"n140","lat":4.9413821,"lng":-74.0112394,"nombre":"","tipo":"cruce"},{"id":"n141","lat":4.9413607,"lng":-74.011057,"nombre":"","tipo":"cruce"},{"id":"n142","lat":4.94135,"lng":-74.0109497,"nombre":"","tipo":"cruce"},{"id":"n143","lat":4.9413554,"lng":-74.0108263,"nombre":"","tipo":"cruce"},{"id":"n144","lat":4.9412913,"lng":-74.0107727,"nombre":"","tipo":"cruce"},{"id":"n145","lat":4.9411524,"lng":-74.0108103,"nombre":"","tipo":"cruce"},{"id":"n146","lat":4.9409708,"lng":-74.0108532,"nombre":"","tipo":"cruce"},{"id":"n147","lat":4.9407571,"lng":-74.0108907,"nombre":"","tipo":"cruce"},{"id":"n148","lat":4.9406236,"lng":-74.0109122,"nombre":"","tipo":"cruce"},{"id":"n149","lat":4.9404847,"lng":-74.0109122,"nombre":"2 entrada aulas E","tipo":"destino"}],"caminos":[["n30","n31"],["n31","n32"],["n32","n33"],["n33","n34"],["n34","n35"],["n35","n36"],["n36","n37"],["n37","n38"],["n38","n39"],["n39","n40"],["n40","n41"],["n41","n42"],["n42","n43"],["n43","n44"],["n44","n13"],["n45","n46"],["n46","n47"],["n28","n47"],["n48","n49"],["n49","n50"],["n50","n51"],["n51","n52"],["n52","n53"],["n53","n54"],["n54","n55"],["n55","n56"],["n56","n57"],["n57","n58"],["n58","n59"],["n59","n60"],["n20","n60"],["n31","n48"],["n40","n45"],["n45","n61"],["n2","n61"],["n61","n62"],["n62","n63"],["n63","n3"],["n3","n4"],["n3","n5"],["n28","n22"],["n22","n23"],["n22","n21"],["n64","n65"],["n65","n66"],["n66","n67"],["n67","n68"],["n68","n69"],["n69","n70"],["n70","n71"],["n71","n72"],["n72","n73"],["n46","n64"],["n25","n73"],["n74","n75"],["n75","n76"],["n76","n77"],["n77","n78"],["n78","n79"],["n79","n80"],["n80","n81"],["n81","n82"],["n82","n83"],["n83","n84"],["n84","n85"],["n85","n86"],["n86","n87"],["n14","n87"],["n44","n74"],["n88","n89"],["n89","n90"],["n1","n90"],["n61","n88"],["n1","n2"],["n66","n8"],["n5","n6"],["n5","n91"],["n91","n92"],["n92","n93"],["n93","n94"],["n94","n95"],["n95","n96"],["n96","n97"],["n97","n7"],["n7","n98"],["n99","n100"],["n100","n101"],["n99","n9"],["n102","n98"],["n102","n9"],["n101","n10"],["n10","n11"],["n12","n103"],["n105","n106"],["n106","n107"],["n107","n17"],["n104","n12"],["n11","n12"],["n104","n105"],["n105","n18"],["n71","n24"],["n108","n109"],["n109","n110"],["n110","n111"],["n111","n112"],["n112","n113"],["n113","n114"],["n19","n114"],["n108","n60"],["n115","n116"],["n116","n117"],["n117","n118"],["n84","n115"],["n118","n29"],["n119","n120"],["n120","n121"],["n121","n122"],["n122","n123"],["n123","n124"],["n124","n125"],["n125","n126"],["n15","n126"],["n84","n119"],["n129","n130"],["n15","n127"],["n131","n132"],["n132","n28"],["n27","n131"],["n129","n127"],["n33","n26"],["n16","n130"],["n133","n134"],["n134","n135"],["n135","n136"],["n136","n137"],["n133","n19"],["n18","n137"],["n139","n140"],["n140","n141"],["n141","n142"],["n142","n143"],["n143","n144"],["n144","n145"],["n145","n146"],["n146","n147"],["n147","n148"],["n139","n66"],["n146","n138"],["n149","n148"]]};
+const $ = s => document.querySelector(s);
+const N = {}; MAPA.nodos.forEach(n => N[n.id] = n);
+const rad = x => x * Math.PI / 180;
+function dist(a, b) {
+  const dLat = rad(b[0] - a[0]), dLng = rad(b[1] - a[1]);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a[0])) * Math.cos(rad(b[0])) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.sqrt(h));
+}
+const m = d => d == null ? "–" : d >= 1000 ? (d / 1000).toFixed(2) + " km" : Math.round(d) + " m";
+const hora = t => new Date(t).toTimeString().slice(0, 8);
+const dur = s => { s = Math.round(s); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
+function chip(sel, t, cls) { const c = $(sel); c.innerHTML = '<span class="dot"></span>' + t; c.className = "chip " + (cls || ""); }
+
+// ======================= MAPA =======================
+const map = L.map("map", { maxZoom: 21 });
+L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 21, maxNativeZoom: 19, attribution: "Imágenes © Esri" }).addTo(map);
+MAPA.caminos.forEach(([a, b]) => { if (N[a] && N[b]) L.polyline([[N[a].lat, N[a].lng], [N[b].lat, N[b].lng]], { color: "#ffc94a", weight: 3, opacity: .45, interactive: false }).addTo(map); });
+MAPA.nodos.filter(n => n.tipo === "destino" && n.nombre).forEach(n =>
+  L.marker([n.lat, n.lng], { icon: L.divIcon({ className: "", html: '<div class="dst"></div>', iconSize: [12, 12], iconAnchor: [6, 6] }) })
+    .bindTooltip(n.nombre, { direction: "top", offset: [0, -6], className: "tt" }).addTo(map));
+map.fitBounds(L.latLngBounds(MAPA.nodos.map(n => [n.lat, n.lng])).pad(.05));
+const capaRuta = L.layerGroup().addTo(map);
+const rastro = L.polyline([], { color: "#c77dff", weight: 4, opacity: .9, interactive: false }).addTo(map);
+let mkCarro = null, circAcc = null;
+const ICONO = (rot, vivo) => L.divIcon({ className: "", iconSize: [36, 36], iconAnchor: [18, 18],
+  html: `<div class="car" style="transform:rotate(${rot}deg)"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" fill="#0f1a33" stroke="${vivo ? "#fff" : "#9daacb"}" stroke-width="2"/><path d="M18 5 L27 27 L18 22 L9 27 Z" fill="${vivo ? "#ffc94a" : "#9daacb"}"/></svg></div>` });
+let seguir = true;
+$("#seguirBtn").onclick = () => { seguir = !seguir; $("#seguirBtn").setAttribute("aria-pressed", seguir); if (seguir && ultimo && ultimo.pos) map.panTo(ultimo.pos); };
+map.on("dragstart", () => { seguir = false; $("#seguirBtn").setAttribute("aria-pressed", false); });
+
+// ======================= ESTADO RECIBIDO =======================
+let ultimo = null, ultimoRx = 0, vivo = false;
+let rec = { pts: [], dist: 0, inicio: null };
+let vel = null, prevPos = null, prevT = null;
+$("#limpiarBtn").onclick = () => { rec = { pts: [], dist: 0, inicio: rec.inicio }; rastro.setLatLngs([]); pintar(); };
+
+function recibirEstado(e, retenido) {
+  if (!retenido) {
+    ultimoRx = Date.now();
+    // velocidad a partir de dos posiciones seguidas
+    if (e.pos && prevPos && e.t > prevT) {
+      const v = dist(prevPos, e.pos) / ((e.t - prevT) / 1000);
+      if (v < 5) vel = vel == null ? v : vel + .35 * (v - vel);
+    }
+    if (e.pos) { prevPos = e.pos; prevT = e.t; }
+    // recorrido: solo mientras va en ruta o en manual
+    if (e.pos && e.modo !== "quieto") {
+      const u = rec.pts[rec.pts.length - 1];
+      if (!u || dist(u, e.pos) > 1) {
+        if (u) rec.dist += dist(u, e.pos);
+        rec.pts.push(e.pos); if (rec.pts.length > 3000) rec.pts.shift();
+        rastro.setLatLngs(rec.pts);
+      }
+    }
+    if (e.modo === "ruta" && (!ultimo || ultimo.modo !== "ruta")) rec.inicio = e.t;
+    if (e.modo !== "ruta" && ultimo && ultimo.modo === "ruta") rec.fin = e.t;
+  }
+  ultimo = e;
+  if (e.pos) {
+    if (!mkCarro) {
+      circAcc = L.circle(e.pos, { radius: e.acc || 5, color: "#4cc9f0", weight: 1, fillOpacity: .1, interactive: false }).addTo(map);
+      mkCarro = L.marker(e.pos, { icon: ICONO(e.rumbo || 0, !retenido), interactive: false, zIndexOffset: 1000 }).addTo(map);
+      map.setView(e.pos, 18);
+    } else {
+      mkCarro.setLatLng(e.pos); circAcc.setLatLng(e.pos).setRadius(e.acc || 5);
+      mkCarro.setIcon(ICONO(e.rumbo || 0, !retenido));
+      if (seguir) map.panTo(e.pos, { animate: true, duration: .5 });
+    }
+  }
+  pintar();
+}
+
+function pintar() {
+  const e = ultimo;
+  if (!e) return;
+  const card = $("#estadoCard");
+  let t, cls;
+  if (!vivo) { t = "Sin señal del carro"; cls = "off"; }
+  else if (e.modo === "ruta") { t = "En ruta a " + (e.destino || "destino"); cls = "ruta"; }
+  else if (e.modo === "manual") { t = "Control manual"; cls = "manual"; }
+  else { t = e.destino ? "Detenido · destino: " + e.destino : "Detenido"; cls = "quieto"; }
+  if (e.sim && vivo) t += " (simulación)";
+  $("#estado").textContent = t; card.className = "card " + cls;
+  $("#msgCarro").textContent = vivo ? (e.msg || "") : "Última posición conocida: " + hora(e.t) + ". Revisa que el celular del carro tenga internet.";
+  $("#vDest").textContent = e.destino || "–";
+  $("#vFalta").textContent = m(e.falta);
+  $("#vSig").textContent = m(e.sig);
+  $("#vVel").textContent = vivo && vel != null ? vel.toFixed(2) + " m/s" : "–";
+  $("#vRec").textContent = m(rec.dist);
+  const ini = rec.inicio, fin = e.modo === "ruta" ? e.t : (rec.fin || null);
+  $("#vTiempo").textContent = ini && fin && fin >= ini ? dur((fin - ini) / 1000) : "–";
+  $("#vAcc").textContent = e.acc == null ? "–" : "±" + e.acc + " m";
+  $("#vRumbo").textContent = e.rumbo == null ? "–" : e.rumbo + "°";
+  $("#vErr").textContent = e.err == null ? "–" : Math.abs(e.err) < 8 ? "recto" : (e.err > 0 ? "→ " : "← ") + Math.abs(e.err) + "°";
+  $("#vBt").textContent = e.sim ? "simulado" : e.bt ? "conectado" : "desconectado";
+  $("#vBt").style.color = e.sim ? "" : e.bt ? "var(--ok)" : "#ff8a93";
+  $("#vBat").textContent = e.bat == null ? "–" : e.bat + " %";
+  $("#vPos").textContent = e.pos ? e.pos[0].toFixed(6) + ", " + e.pos[1].toFixed(6) : "–";
+  // obstáculo: barra de 0 a 150 cm
+  const o = e.obst, ob = $("#obsBar");
+  if (o == null) { $("#vObs").textContent = e.sim ? "simulado" : "–"; ob.style.width = "0"; }
+  else {
+    $("#vObs").textContent = o >= 400 ? "libre" : o + " cm";
+    const k = Math.min(1, o / 150);
+    ob.style.width = (k * 100) + "%";
+    ob.style.background = o < 25 ? "var(--accent)" : o < 60 ? "var(--warn)" : "var(--ok)";
+  }
+  // motores: barra centrada, -255..255
+  [["#barIzq", "#vIzq", 0], ["#barDer", "#vDer", 1]].forEach(([b, v, i]) => {
+    const x = (e.motores || [0, 0])[i], k = Math.abs(x) / 255 * 50;
+    const el = $(b); el.style.left = x >= 0 ? "50%" : (50 - k) + "%"; el.style.width = k + "%";
+    el.style.background = x >= 0 ? "var(--ok)" : "var(--warn)";
+    $(v).textContent = x;
+  });
+}
+
+function recibirRuta(r) {
+  capaRuta.clearLayers();
+  if (!r || !r.pts) return;
+  L.polyline(r.pts, { color: "#0b1326", weight: 10, opacity: .6, interactive: false }).addTo(capaRuta);
+  L.polyline(r.pts, { color: "#4cc9f0", weight: 6, opacity: .9, interactive: false }).addTo(capaRuta);
+  const d = r.pts[r.pts.length - 1];
+  L.marker(d, { interactive: false, icon: L.divIcon({ className: "", iconSize: [30, 40], iconAnchor: [15, 38],
+    html: '<svg width="30" height="40" viewBox="0 0 30 40"><path d="M15 39C15 39 28 23 28 14A13 13 0 0 0 2 14C2 23 15 39 15 39Z" fill="#e63946" stroke="#fff" stroke-width="2"/><circle cx="15" cy="14" r="5" fill="#fff"/></svg>' }) })
+    .bindTooltip(r.destino || "Destino", { permanent: true, direction: "top", offset: [0, -40], className: "tt" }).addTo(capaRuta);
+}
+
+function agregarEvento(t, texto) {
+  const ul = $("#eventos"); const v = ul.querySelector(".vacio"); if (v) v.remove();
+  const li = document.createElement("li");
+  const tm = document.createElement("time"); tm.textContent = hora(t);
+  const sp = document.createElement("span"); sp.textContent = texto;
+  li.append(tm, sp); ul.prepend(li);
+  while (ul.children.length > 60) ul.lastChild.remove();
+}
+
+// "en línea" si llegó un dato hace menos de 5 s
+setInterval(() => {
+  const ahora = Date.now(), antes = vivo;
+  vivo = ultimoRx && ahora - ultimoRx < 5000;
+  if (vivo) chip("#chipCar", "Carro: en vivo", "ok");
+  else if (ultimo) chip("#chipCar", "Carro: sin señal", "bad");
+  if (antes && !vivo) { agregarEvento(ahora, "Se perdió la señal del carro"); if (ultimo) mkCarro && mkCarro.setIcon(ICONO(ultimo.rumbo || 0, false)); }
+  if (antes !== vivo) pintar();
+}, 1000);
+
+// ======================= CONEXIÓN MQTT =======================
+const BROKER = new URLSearchParams(location.search).get("broker") || "wss://broker.hivemq.com:8884/mqtt";
+let carroId = "umng-carro-guia";
+try { carroId = localStorage.getItem("monitorCarroId") || carroId; } catch (e) {}
+$("#idIn").value = carroId;
+let red = null;
+const topico = t => "carroguia/" + carroId + "/" + t;
+function conectar() {
+  if (!window.mqtt) { chip("#chipSrv", "Servidor: sin librería", "bad"); return; }
+  if (red) { try { red.end(true); } catch (e) {} }
+  chip("#chipSrv", "Servidor: conectando…", "warn");
+  red = mqtt.connect(BROKER, { clientId: "monitor-" + Math.random().toString(16).slice(2, 10), clean: true, reconnectPeriod: 3000, connectTimeout: 10000 });
+  red.on("connect", () => { chip("#chipSrv", "Servidor: conectado", "ok"); red.subscribe([topico("estado"), topico("ruta"), topico("evento")]); });
+  red.on("offline", () => chip("#chipSrv", "Servidor: sin internet", "warn"));
+  red.on("error", () => chip("#chipSrv", "Servidor: error", "bad"));
+  red.on("message", (t, msg, paquete) => {
+    let o; try { o = JSON.parse(msg.toString()); } catch (e) { return; }
+    if (t === topico("estado")) recibirEstado(o, paquete.retain);
+    else if (t === topico("ruta")) recibirRuta(o);
+    else if (t === topico("evento") && o.texto) agregarEvento(o.t || Date.now(), o.texto);
+  });
+}
+$("#idBtn").onclick = () => {
+  const v = $("#idIn").value.trim().replace(/[^\w-]/g, ""); if (!v) return;
+  carroId = v; $("#idIn").value = v;
+  try { localStorage.setItem("monitorCarroId", v); } catch (e) {}
+  ultimo = null; ultimoRx = 0; rec = { pts: [], dist: 0, inicio: null }; rastro.setLatLngs([]); capaRuta.clearLayers();
+  conectar();
+};
+
+let armado = null;
+$("#stopBtn").onclick = () => {
+  const b = $("#stopBtn");
+  if (!armado) { b.classList.add("armed"); b.textContent = "Toca otra vez para detener"; armado = setTimeout(() => { b.classList.remove("armed"); b.textContent = "Parada de emergencia"; armado = null; }, 3000); return; }
+  clearTimeout(armado); armado = null; b.classList.remove("armed"); b.textContent = "Parada de emergencia";
+  if (!red || !red.connected) { agregarEvento(Date.now(), "No se pudo enviar la parada: el monitor no tiene conexión"); return; }
+  red.publish(topico("orden"), JSON.stringify({ accion: "parar", t: Date.now() }), { qos: 1 });
+  agregarEvento(Date.now(), "Parada de emergencia enviada");
+};
+
+conectar();
+</script>
+</body>
+</html>
