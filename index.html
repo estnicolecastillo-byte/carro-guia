@@ -132,6 +132,11 @@ input[type=range]{width:100%;accent-color:var(--route)}
         <label class="f" for="velIn">Velocidad al avanzar <output id="velOut"></output><input type="range" id="velIn" min="80" max="255" step="5" value="150"></label>
         <label class="f" for="radIn">Distancia para dar por alcanzado un punto <output id="radOut"></output><input type="range" id="radIn" min="2" max="10" step="0.5" value="5"></label>
         <label class="f" for="kpIn">Fuerza de corrección al girar <output id="kpOut"></output><input type="range" id="kpIn" min="0.5" max="4" step="0.1" value="1.8"></label>
+        <label class="f" for="montSel">Cómo va el celular en el carro
+          <select id="montSel">
+            <option value="acostado">Acostado: pantalla arriba, parte de arriba hacia el frente</option>
+            <option value="parado">Parado: cámara trasera mirando al frente del carro</option>
+          </select></label>
         <label class="f" for="offIn">Ajuste de brújula (si el carro siempre se desvía al mismo lado) <output id="offOut"></output><input type="range" id="offIn" min="-180" max="180" step="1" value="0"></label>
         <label class="check"><input type="checkbox" id="simChk"> Modo simulación (probar sin carro, en el computador)</label>
         <label class="f" for="simVel">Rapidez de la simulación <output id="simOut"></output><input type="range" id="simVel" min="1" max="20" step="1" value="5"></label>
@@ -147,6 +152,7 @@ input[type=range]{width:100%;accent-color:var(--route)}
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script>
 "use strict";
 // ======================= MAPA DEL CAMPUS (hecho con el editor) =======================
@@ -228,15 +234,17 @@ const S = {
   ruta: null, idx: 0, navegando: false,
   destId: null, obst: null, obstAviso: false,
   manual: null, cmd: "S",
-  sim: false, simCar: null, simPuesto: false
+  sim: false, simCar: null, simPuesto: false,
+  girando: false, err: null, falta: null, sig: null
 };
-const AJ = { vel: 150, radio: 5, kp: 1.8, off: 0, simX: 5 };
+const AJ = { vel: 150, radio: 5, kp: 1.8, off: 0, simX: 5, montaje: "acostado" };
 function ajustes() {
-  AJ.vel = +$("#velIn").value; AJ.radio = +$("#radIn").value; AJ.kp = +$("#kpIn").value; AJ.off = +$("#offIn").value; AJ.simX = +$("#simVel").value;
+  AJ.vel = +$("#velIn").value; AJ.radio = +$("#radIn").value; AJ.kp = +$("#kpIn").value; AJ.off = +$("#offIn").value; AJ.simX = +$("#simVel").value; AJ.montaje = $("#montSel").value;
   $("#velOut").textContent = AJ.vel + " / 255"; $("#radOut").textContent = AJ.radio + " m"; $("#kpOut").textContent = AJ.kp.toFixed(1);
   $("#offOut").textContent = (AJ.off > 0 ? "+" : "") + AJ.off + "°"; $("#simOut").textContent = "×" + AJ.simX;
 }
 ["#velIn", "#radIn", "#kpIn", "#offIn", "#simVel"].forEach(s => $(s).oninput = ajustes);
+$("#montSel").onchange = () => { ajustes(); rumboX = rumboY = null; };
 ajustes();
 
 // ======================= MAPA =======================
@@ -267,7 +275,7 @@ function dibujarCarro() {
 }
 function dibujarRuta() {
   capaRuta.clearLayers(); lineaRuta = mkWp = mkDest = null;
-  if (!S.ruta) return;
+  if (!S.ruta) { pub("ruta", {}, true); return; }
   const pts = S.ruta.pts.map(p => [p.lat, p.lng]);
   L.polyline(pts, { color: "#0b1326", weight: 10, opacity: .6, interactive: false }).addTo(capaRuta);
   lineaRuta = L.polyline(pts, { color: "#4cc9f0", weight: 6, interactive: false }).addTo(capaRuta);
@@ -275,6 +283,7 @@ function dibujarRuta() {
   mkDest = L.marker([d.lat, d.lng], { interactive: false, icon: L.divIcon({ className: "", iconSize: [30, 40], iconAnchor: [15, 38],
     html: '<svg width="30" height="40" viewBox="0 0 30 40"><path d="M15 39C15 39 28 23 28 14A13 13 0 0 0 2 14C2 23 15 39 15 39Z" fill="#e63946" stroke="#fff" stroke-width="2"/><circle cx="15" cy="14" r="5" fill="#fff"/></svg>' }) }).addTo(capaRuta);
   mkDest.bindTooltip(d.nombre, { permanent: true, direction: "top", offset: [0, -40], className: "tt" });
+  pub("ruta", { pts, destino: d.nombre }, true);
   mkWp = L.marker(pts[0], { interactive: false, icon: L.divIcon({ className: "", html: '<div class="wp"></div>', iconSize: [14, 14], iconAnchor: [7, 7] }) }).addTo(capaRuta);
 }
 
@@ -309,14 +318,14 @@ $("#goBtn").onclick = async () => {
   prepararRuta();   // recalcula desde donde está el carro ahora
   if (!S.ruta) return;
   if (!bt.ok && !S.sim) mensaje("Ojo: el carro no está conectado por Bluetooth. La ruta corre pero el carro no se moverá.", "warn");
-  S.navegando = true; S.manual = null;
+  S.navegando = true; S.manual = null; S.girando = false; reiniciarVerificacion();
   pedirPantallaEncendida();
-  log("Ruta iniciada a " + N[S.destId].nombre + " (" + m(S.ruta.total) + ")");
+  evento("Ruta iniciada a " + N[S.destId].nombre + " (" + m(S.ruta.total) + ")");
 };
 $("#stopBtn").onclick = () => detener("Detenido");
 function detener(t) {
-  S.navegando = false; S.cmd = "S"; enviarAhora("S");
-  mensaje(t + ".", "warn"); log(t);
+  S.navegando = false; S.cmd = "S"; enviarAhora("S"); S.err = null;
+  mensaje(t + ".", "warn"); evento(t);
 }
 
 // ======================= NAVEGACIÓN (cada 200 ms) =======================
@@ -324,10 +333,18 @@ function pasoNavegacion() {
   const R = S.ruta, p = S.pos;
   if (!R || !p) return "S";
   if (S.rumbo === null) { mensaje("Sin brújula: no sé hacia dónde mira el carro.", "bad"); return "S"; }
+  // Con el GPS muy impreciso (bajo techo, entre edificios) el punto salta varios metros:
+  // es mejor esperar quieto que perseguir un punto que se mueve.
+  if (!S.sim && S.acc != null && S.acc > GPS_MAX) {
+    mensaje("GPS impreciso (±" + Math.round(S.acc) + " m). Esperando mejor señal… (sal a un lugar abierto)", "warn");
+    S.err = null; return "S";
+  }
+  // el radio para dar por alcanzado un punto nunca es menor que el error del GPS (si no, el carro orbita el punto)
+  const radio = S.sim ? AJ.radio : Math.max(AJ.radio, Math.min(S.acc || 0, 10));
   const pts = R.pts, ult = pts.length - 1;
   // avanzar al siguiente punto si ya llegó a este o ya lo pasó
   while (S.idx < ult) {
-    if (dist(p, pts[S.idx]) < AJ.radio) { S.idx++; continue; }
+    if (dist(p, pts[S.idx]) < radio) { S.idx++; continue; }
     if (S.idx > 0 && proyectar(p, pts[S.idx - 1], pts[S.idx]).t > 1) { S.idx++; continue; }
     break;
   }
@@ -335,25 +352,53 @@ function pasoNavegacion() {
   let falta = dObj; for (let i = S.idx; i < ult; i++) falta += dist(pts[i], pts[i + 1]);
   $("#vFalta").textContent = m(falta);
   $("#vSig").textContent = m(dObj);
+  S.falta = falta; S.sig = dObj;
   if (mkWp) mkWp.setLatLng([pts[S.idx].lat, pts[S.idx].lng]);
-  if (S.idx === ult && dObj < AJ.radio) {
-    S.navegando = false;
-    mensaje("¡Llegamos a " + N[R.destId].nombre + "!", "ok"); log("Llegada a " + N[R.destId].nombre);
+  if (S.idx === ult && dObj < radio) {
+    S.navegando = false; S.err = null;
+    mensaje("¡Llegamos a " + N[R.destId].nombre + "!", "ok"); evento("Llegada a " + N[R.destId].nombre);
     $("#vErr").textContent = "–";
     return "S";
   }
   const err = norm180(rumbo(p, pts[S.idx]) - S.rumbo);   // + = el punto está a la derecha
+  S.err = Math.round(err);
   $("#vErr").textContent = Math.abs(err) < 8 ? "recto" : (err > 0 ? "→ " : "← ") + Math.round(Math.abs(err)) + "°";
   if (S.obst !== null && S.obst < 25) { mensaje("Obstáculo adelante: esperando que se despeje…", "warn"); }
   else mensaje("Rumbo a " + N[R.destId].nombre, "ok");
-  // giro en su sitio si el punto está muy de lado; si no, avanza corrigiendo
-  if (Math.abs(err) > 45) {
-    const g = Math.round(clamp(AJ.vel * 0.85, 90, 200));
+  // giro en su sitio si el punto está muy de lado; si no, avanza corrigiendo.
+  // Con histéresis: empieza a girar en su sitio por encima de 50° y deja de hacerlo por debajo de 20°,
+  // para que no cambie de modo a cada rato cuando el error ronda los 45°.
+  if (!S.girando && Math.abs(err) > 50) S.girando = true;
+  else if (S.girando && Math.abs(err) < 20) S.girando = false;
+  if (S.girando) {
+    const g = Math.round(clamp(AJ.vel * 0.75, 100, 170));
     return err > 0 ? `M${g},${-g}` : `M${-g},${g}`;
   }
-  const corr = AJ.kp * err;
+  // la rueda de adentro nunca se frena del todo ni va hacia atrás al corregir
+  const corr = clamp(AJ.kp * err, -AJ.vel * 0.7, AJ.vel * 0.7);
   const izq = Math.round(clamp(AJ.vel + corr, -255, 255)), der = Math.round(clamp(AJ.vel - corr, -255, 255));
   return `M${izq},${der}`;
+}
+
+// ======================= VERIFICACIÓN DE GIRO =======================
+// Si se le ordena al carro girar con fuerza durante 2.5 s, la brújula tiene que moverse en ese sentido.
+//  - Si casi no se mueve: el celular no va en el carro, la brújula está bloqueada por los motores o las ruedas no giran.
+//  - Si se mueve al revés: lados de motores cruzados o el celular montado distinto a lo elegido en Ajustes.
+// En los dos casos el carro se quedaría dando vueltas para siempre, así que se detiene y avisa.
+const GPS_MAX = 15;    // m: con más error que esto el carro espera quieto
+const VG = { prev: null, acum: 0, t: 0 };
+function reiniciarVerificacion() { VG.prev = null; VG.acum = 0; VG.t = 0; }
+function verificarGiro(cmd, dt) {
+  if (S.rumbo === null) return;
+  const mm = /^M(-?\d+),(-?\d+)$/.exec(cmd);
+  const dif = mm ? (+mm[1] - +mm[2]) : 0;          // > 0: se ordena girar a la derecha
+  const d = VG.prev === null ? 0 : norm180(S.rumbo - VG.prev); VG.prev = S.rumbo;
+  if (Math.abs(dif) < 120) { VG.acum = 0; VG.t = 0; return; }   // solo se evalúan giros fuertes
+  VG.acum += d * Math.sign(dif); VG.t += dt;
+  if (VG.t < 2.5) return;
+  const giro = VG.acum; VG.acum = 0; VG.t = 0;
+  if (giro < -30) detener("Giro invertido: se ordenó girar a un lado y la brújula marcó el otro. Revisa la prueba de ruedas (orden T) o el montaje del celular en Ajustes");
+  else if (Math.abs(giro) < 15) detener("La brújula no cambia aunque el carro está girando. ¿El celular va montado en el carro? ¿Lejos de los motores?");
 }
 
 const MANUAL = { F: v => `M${v},${v}`, B: v => `M${-v},${-v}`, L: v => `M${-v},${v}`, R: v => `M${v},${-v}` };
@@ -373,6 +418,7 @@ setInterval(() => {
     else if (S.navegando) S.cmd = pasoNavegacion();
     else S.cmd = "S";
     if (S.sim) pasoSim(0.2);
+    if (S.navegando) verificarGiro(S.cmd, 0.2); else reiniciarVerificacion();
   }
   enviar(S.cmd);
   $("#vRumbo").textContent = S.rumbo === null ? "–" : Math.round(S.rumbo) + "°";
@@ -415,7 +461,7 @@ function recibir(txt) {
   while ((i = bt.rx.indexOf("\n")) >= 0) {
     const l = bt.rx.slice(0, i).trim(); bt.rx = bt.rx.slice(i + 1);
     if (l[0] === "D") S.obst = parseInt(l.slice(1), 10);
-    else if (l === "O") log("El carro frenó por un obstáculo");
+    else if (l === "O") evento("El carro frenó por un obstáculo");
   }
   if (bt.rx.length > 200) bt.rx = "";
 }
@@ -450,9 +496,30 @@ function nuevaBrujula(h) {
   chip("#chipBru", "Brújula: " + Math.round(S.rumbo) + "°", "ok");
   dibujarCarro();
 }
+// Rumbo (0 = norte, 90 = este) de la dirección que apunta al frente del carro, a partir de alpha/beta/gamma.
+// "acostado": el frente es la parte de arriba del celular. "parado": el frente es hacia donde mira la cámara trasera.
+// (360 - alpha, como estaba antes, solo vale con el celular acostado; parado da cualquier cosa.)
+function rumboDesdeOrientacion(e) {
+  const a = rad(e.alpha), b = rad(e.beta || 0), g = rad(e.gamma || 0);
+  const sA = Math.sin(a), cA = Math.cos(a), sB = Math.sin(b), cB = Math.cos(b), sG = Math.sin(g), cG = Math.cos(g);
+  let este, norte;
+  if (AJ.montaje === "parado") { este = -(cG * sA * sB + cA * sG); norte = -(sA * sG - cA * cG * sB); }
+  else { este = -cB * sA; norte = cA * cB; }
+  return (deg(Math.atan2(este, norte)) + 360) % 360;
+}
+let avisoMontaje = 0;
 function onOrientacion(e) {
-  if (e.webkitCompassHeading != null) nuevaBrujula(e.webkitCompassHeading);
-  else if (e.absolute && e.alpha != null) nuevaBrujula(360 - e.alpha);
+  if (e.webkitCompassHeading != null) { nuevaBrujula(e.webkitCompassHeading); return; }
+  if (!(e.absolute && e.alpha != null)) return;
+  // aviso si la posición real del celular no coincide con la elegida en Ajustes
+  const parado = Math.abs(e.beta || 0) > 50 || Math.abs(e.gamma || 0) > 50;
+  if ((parado ? "parado" : "acostado") !== AJ.montaje && Date.now() - avisoMontaje > 5000) {
+    avisoMontaje = Date.now();
+    chip("#chipBru", "Brújula: revisa el montaje en Ajustes", "warn");
+    log("El celular parece estar " + (parado ? "parado" : "acostado") + ", pero en Ajustes dice " + AJ.montaje);
+    return;
+  }
+  nuevaBrujula(rumboDesdeOrientacion(e));
 }
 let gpsId = null;
 $("#senBtn").onclick = async () => {
@@ -506,6 +573,56 @@ function pasoSim(dt) {
   S.pos = { lat: c.lat, lng: c.lng }; S.rumbo = c.h;
   dibujarCarro();
 }
+
+// ======================= MONITOR (MQTT) =======================
+// Publica el estado para monitor.html (mismos tópicos: carroguia/<id>/estado, ruta, evento) y
+// escucha la parada de emergencia (carroguia/<id>/orden). El id se cambia con ?id=otro-carro en la URL.
+const QS = new URLSearchParams(location.search);
+const CARRO_ID = (QS.get("id") || "umng-carro-guia").replace(/[^\w-]/g, "");
+const BROKER = QS.get("broker") || "wss://broker.hivemq.com:8884/mqtt";
+const topico = t => "carroguia/" + CARRO_ID + "/" + t;
+let red = null, bateria = null;
+function pub(t, o, retener) { if (red && red.connected) red.publish(topico(t), JSON.stringify(o), { retain: !!retener }); }
+function evento(texto) { log(texto); pub("evento", { t: Date.now(), texto }); }
+function conectarMonitor() {
+  if (!window.mqtt) { log("Monitor: no cargó la librería MQTT"); return; }
+  red = mqtt.connect(BROKER, { clientId: "carro-" + Math.random().toString(16).slice(2, 10), clean: true, reconnectPeriod: 3000, connectTimeout: 10000 });
+  red.on("connect", () => {
+    log("Monitor: conectado (id " + CARRO_ID + ")");
+    red.subscribe(topico("orden"));
+    if (S.ruta) pub("ruta", { pts: S.ruta.pts.map(p => [p.lat, p.lng]), destino: N[S.ruta.destId].nombre }, true);
+  });
+  red.on("message", (t, msg) => {
+    if (t !== topico("orden")) return;
+    let o; try { o = JSON.parse(msg.toString()); } catch (e) { return; }
+    if (o.accion === "parar") {
+      S.manual = null;
+      if (S.navegando) detener("Parada de emergencia desde el monitor");
+      else { S.cmd = "S"; enviarAhora("S"); evento("Parada de emergencia desde el monitor"); }
+    }
+  });
+}
+try { navigator.getBattery && navigator.getBattery().then(b => bateria = b); } catch (e) {}
+setInterval(() => {
+  const mm = /^M(-?\d+),(-?\d+)$/.exec(S.cmd);
+  pub("estado", {
+    t: Date.now(),
+    pos: S.pos ? [S.pos.lat, S.pos.lng] : null,
+    acc: S.acc == null ? null : Math.round(S.acc),
+    rumbo: S.rumbo == null ? null : Math.round(S.rumbo),
+    err: S.navegando ? S.err : null,
+    modo: S.navegando ? "ruta" : S.manual ? "manual" : "quieto",
+    destino: S.destId ? N[S.destId].nombre : null,
+    falta: S.navegando ? Math.round(S.falta) : null,
+    sig: S.navegando ? Math.round(S.sig) : null,
+    obst: S.obst,
+    motores: mm ? [+mm[1], +mm[2]] : [0, 0],
+    bt: bt.ok, sim: S.sim,
+    bat: bateria ? Math.round(bateria.level * 100) : null,
+    msg: $("#msg").textContent
+  }, true);
+}, 1000);
+conectarMonitor();
 
 if (!navigator.bluetooth) log("Bluetooth web no disponible en este navegador (necesita Chrome en Android con https).");
 log("Mapa cargado: " + MAPA.nodos.length + " puntos, " + MAPA.caminos.length + " caminos, " + DESTINOS.length + " destinos.");
